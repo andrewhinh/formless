@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import modal
 
-from utils import (
+from api.utils import (
     DEPLOY_ALLOW_CONCURRENT_INPUTS,
     DEPLOY_CONTAINER_IDLE_TIMEOUT,
     DEPLOY_TIMEOUT,
@@ -17,13 +17,12 @@ from utils import (
 
 only_download = True  # turn off gpu for initial download
 model = "meta-llama/Llama-3.2-90B-Vision-Instruct"
-max_model_len = 131072
-max_num_seqs = 256
-enforce_eager = True
+gpu_memory_utilization = 0.90
+max_model_len = 8192
+max_num_seqs = 1
+enforce_eager = False  # capture the graph for faster inference, but slower cold starts (30s > 20s)
 
-image_url = (
-    "https://cdn.britannica.com/74/252374-050-AD45E98E/dog-breed-height-comparison.jpg"
-)
+image_url = "https://cdn.britannica.com/74/252374-050-AD45E98E/dog-breed-height-comparison.jpg"
 question = "What is the content of this image?"
 temperature = 0.2
 max_tokens = 64
@@ -33,13 +32,10 @@ max_tokens = 64
 config_keys = [
     k
     for k, v in globals().items()
-    if not k.startswith("_")
-    and isinstance(v, (int, float, str, bool, dict, list, Path, type(None)))
+    if not k.startswith("_") and isinstance(v, (int, float, str, bool, dict, list, tuple, Path, type(None)))
 ]
 config = {k: globals()[k] for k in config_keys}
-config = {
-    k: str(v) if isinstance(v, Path) else v for k, v in config.items()
-}  # since Path not serializable
+config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  # since Path not serializable
 
 # -----------------------------------------------------------------------------
 
@@ -61,7 +57,7 @@ app = modal.App(name=APP_NAME)
 # Model
 @app.cls(
     image=IMAGE,
-    gpu=GPU_CONFIG if only_download else None,
+    gpu=None if only_download else GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=[modal.Secret.from_dotenv(path=Path(__file__).parent)],
     timeout=DEPLOY_TIMEOUT,
@@ -80,12 +76,12 @@ class Model:
             ignore_patterns=["*.pt", "*.bin"],
         )
 
-        if only_download:
+        if config["only_download"]:
             return
 
-        """Download the model and tokenizer."""
         self.llm = LLM(
             model=config["model"],
+            gpu_memory_utilization=config["gpu_memory_utilization"],
             max_model_len=config["max_model_len"],
             max_num_seqs=config["max_num_seqs"],
             enforce_eager=config["enforce_eager"],
@@ -94,6 +90,9 @@ class Model:
 
     @modal.web_endpoint(method="POST", docs=True)
     async def infer(self, image_url: str) -> str:
+        if config["only_download"]:
+            return ""
+
         import requests
         from PIL import Image
         from vllm import SamplingParams
@@ -120,7 +119,7 @@ class Model:
         }
 
         outputs = self.llm.generate(inputs, sampling_params=sampling_params)
-        generated_text = o.outputs[0].text
+        generated_text = outputs.outputs[0].text
 
         # show the question, image, and response in the terminal for demonstration purposes
         print(
@@ -130,9 +129,7 @@ class Model:
             Colors.END,
             sep="",
         )
-        print(
-            f"request {request_id} completed in {round((time.monotonic_ns() - start) / 1e9, 2)} seconds"
-        )
+        print(f"request {request_id} completed in {round((time.monotonic_ns() - start) / 1e9, 2)} seconds")
 
         return response
 
@@ -145,17 +142,11 @@ def main(
     import requests
 
     model = Model()
-    if only_download:
-        return
 
-    response = requests.post(
-        model.infer.web_url, json={"image_url": config["image_url"]}
-    )
+    response = requests.post(model.infer.web_url, json={"image_url": config["image_url"]})
     assert response.ok, response.status_code
 
     if twice:
         # second response is faster, because the Function is already running
-        response = requests.post(
-            model.infer.web_url, json={"image_url": config["image_url"]}
-        )
+        response = requests.post(model.infer.web_url, json={"image_url": config["image_url"]})
         assert response.ok, response.status_code

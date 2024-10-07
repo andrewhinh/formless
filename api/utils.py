@@ -7,7 +7,7 @@ from PIL import ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-NAME = "v-ocr"
+NAME = "formless"
 
 # Modal
 CUDA_VERSION = "12.4.0"
@@ -19,9 +19,7 @@ PYTHON_VERSION = "3.12"
 PRETRAINED_VOLUME = f"{NAME}-pretrained"
 RUNS_VOLUME = f"{NAME}-runs"
 VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
-    f"/{PRETRAINED_VOLUME}": modal.Volume.from_name(
-        PRETRAINED_VOLUME, create_if_missing=True
-    ),
+    f"/{PRETRAINED_VOLUME}": modal.Volume.from_name(PRETRAINED_VOLUME, create_if_missing=True),
     f"/{RUNS_VOLUME}": modal.Volume.from_name(RUNS_VOLUME, create_if_missing=True),
 }
 

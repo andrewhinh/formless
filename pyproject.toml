@@ -1,5 +1,5 @@
 [project]
-name = "v-ocr"
+name = "formless"
 version = "0.1.0"
 description = "Image parsing."
 readme = "README.md"
@@ -7,3 +7,54 @@ requires-python = ">=3.12"
 dependencies = [
     "modal>=0.64.178",
 ]
+
+
+[project.scripts]
+formless = "formless:app"
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = []
+
+[tool.ruff]
+# Only check selected error codes.
+lint.select = ["ANN", "B", "B9", "C", "D", "E", "F", "I", "S", "W"]
+# Codes to ignore.
+lint.ignore = [
+    "E203", "E402", "E501",  # whitespace, import, line length
+    "S101", "S113", "S311", "S105",  # assert removed in bytecode, no request timeout, pRNG not secure, hardcoded password
+    "ANN", "ANN002", "ANN003", "ANN101", "ANN102", "ANN202",  # ignore all for now, but always ignore some
+    "B008", # ignore function calls in argument defaults
+    "D100", "D101", "D102", "D103", "D104", "D105",  # missing docstrings
+    "D200", "D205", "D400", "D401", "D404",  # whitespace issues and first line content
+]
+# Allow lines to be as long as 120.
+line-length = 120
+
+[tool.ruff.lint.mccabe]
+# Flag errors (`C901`) whenever the complexity level exceeds 12.
+max-complexity = 12
+
+[tool.ruff.lint.pydocstyle]
+# Use the numpy convention for docstrings.
+convention = "numpy"
+
+[tool.ruff.lint.flake8-annotations]
+# Allow un-annotated Nones in returns.
+suppress-none-returning = true
+# Allow init to have no return annotation.
+mypy-init-return = true
+
+[tool.ruff.lint.per-file-ignores]
+# ignore unused imports in __init__.py
+"*/__init__.py" = ["F401", "I"]
+# ignore data files in data/
+"*/data/*.py" = ["F", "I"]
+# ignore fn redefinitions with fasthtml
+"*/main.py" = ["F811"]
+# ignore shell usage
+"*/formless/__init__.py" = ["S605", "S607"]
