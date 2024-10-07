@@ -1,2 +1,3 @@
-# gpu-mode
-All things GPU
+# v-ocr
+
+Image parsing.

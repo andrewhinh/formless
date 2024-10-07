@@ -1,0 +1,9 @@
+[project]
+name = "v-ocr"
+version = "0.1.0"
+description = "Image parsing."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "modal>=0.64.178",
+]
