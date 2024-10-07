@@ -15,17 +15,17 @@ from api.utils import (
     Colors,
 )
 
-only_download = True  # turn off gpu for initial download
-model = "meta-llama/Llama-3.2-90B-Vision-Instruct"
+only_download = False  # turn off gpu for initial download
+model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 gpu_memory_utilization = 0.90
 max_model_len = 8192
 max_num_seqs = 1
-enforce_eager = False  # capture the graph for faster inference, but slower cold starts (30s > 20s)
+enforce_eager = True
 
-image_url = "https://cdn.britannica.com/74/252374-050-AD45E98E/dog-breed-height-comparison.jpg"
+image_url = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
 question = "What is the content of this image?"
 temperature = 0.2
-max_tokens = 64
+max_tokens = 128
 
 # -----------------------------------------------------------------------------
 
@@ -42,7 +42,7 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 
 # Modal
 GPU_TYPE = "H100"
-GPU_COUNT = 4
+GPU_COUNT = 2
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
@@ -88,8 +88,8 @@ class Model:
             tensor_parallel_size=GPU_COUNT,
         )
 
-    @modal.web_endpoint(method="POST", docs=True)
-    async def infer(self, image_url: str) -> str:
+    @modal.web_endpoint(method="POST")
+    async def infer(self, request: dict) -> str:
         if config["only_download"]:
             return ""
 
@@ -101,7 +101,7 @@ class Model:
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        response = requests.get(image_url, stream=True)
+        response = requests.get(request.get("image_url"), stream=True)
         response.raise_for_status()
         image = Image.open(response.raw).convert("RGB")
         prompt = f"<|image|><|begin_of_text|>{config['question']}"
@@ -119,7 +119,7 @@ class Model:
         }
 
         outputs = self.llm.generate(inputs, sampling_params=sampling_params)
-        generated_text = outputs.outputs[0].text
+        generated_text = outputs[0].outputs[0].text.strip()
 
         # show the question, image, and response in the terminal for demonstration purposes
         print(
@@ -131,7 +131,7 @@ class Model:
         )
         print(f"request {request_id} completed in {round((time.monotonic_ns() - start) / 1e9, 2)} seconds")
 
-        return response
+        return generated_text
 
 
 ## For testing
