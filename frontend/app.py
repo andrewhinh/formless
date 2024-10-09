@@ -4,12 +4,12 @@ from pathlib import Path
 import modal
 
 from utils import (
-    FE_ALLOW_CONCURRENT_INPUTS,
-    FE_CONTAINER_IDLE_TIMEOUT,
-    FE_TIMEOUT,
+    MINUTES,
     NAME,
     PYTHON_VERSION,
 )
+
+parent_path: Path = Path(__file__).parent
 
 # Modal
 FE_IMAGE = (
@@ -17,8 +17,13 @@ FE_IMAGE = (
     .pip_install(  # add Python dependencies
         "python-fasthtml==0.6.10", "simpleicons==7.21.0"
     )
-    .copy_local_dir(Path(__file__).parent, "/root/")
+    .copy_local_dir(parent_path, "/root/")
 )
+
+FE_TIMEOUT = 24 * 60 * MINUTES  # max
+FE_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
+FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
+
 
 APP_NAME = f"{NAME}-frontend"
 app = modal.App(APP_NAME)
@@ -26,7 +31,7 @@ app = modal.App(APP_NAME)
 
 @app.function(
     image=FE_IMAGE,
-    secrets=[modal.Secret.from_dotenv(path=Path(__file__).parent)],
+    secrets=[modal.Secret.from_dotenv(path=parent_path)],
     timeout=FE_TIMEOUT,
     container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
     allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
@@ -154,7 +159,6 @@ def modal_get():
 
     @rt("/{fname:path}.{ext:static}")
     async def static_files(fname: str, ext: str):
-        parent_path = Path(__file__).parent
         static_file_path = parent_path / f"{fname}.{ext}"
         if static_file_path.exists():
             return fh.FileResponse(static_file_path)

@@ -7,10 +7,8 @@ import modal
 from PIL import ImageFile
 
 from utils import (
-    API_ALLOW_CONCURRENT_INPUTS,
-    API_CONTAINER_IDLE_TIMEOUT,
-    API_TIMEOUT,
     GPU_IMAGE,
+    MINUTES,
     NAME,
     VOLUME_CONFIG,
     Colors,
@@ -49,6 +47,9 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
     "vllm==0.6.2",
 )
+API_TIMEOUT = 5 * MINUTES
+API_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
+API_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 GPU_TYPE = "H100"
 GPU_COUNT = 2

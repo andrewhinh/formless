@@ -24,15 +24,6 @@ CPU = 20  # cores (Modal max)
 
 MINUTES = 60  # seconds
 
-API_TIMEOUT = 5 * MINUTES
-API_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
-API_ALLOW_CONCURRENT_INPUTS = 1000  # max
-
-FE_TIMEOUT = 24 * 60 * MINUTES  # max
-FE_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
-FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
-
-
 GPU_IMAGE = (
     modal.Image.from_registry(  # start from an official NVIDIA CUDA image
         TAG, add_python=PYTHON_VERSION
