@@ -1,4 +1,5 @@
 import os
+import tempfile
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -7,6 +8,7 @@ import modal
 from PIL import ImageFile
 
 from utils import (
+    DEFAULT_IMG_URL,
     GPU_IMAGE,
     MINUTES,
     NAME,
@@ -25,7 +27,6 @@ max_model_len = 8192
 max_num_seqs = 1
 enforce_eager = True
 
-image_url = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
 question = "What is the content of this image?"
 temperature = 0.2
 max_tokens = 128
@@ -45,7 +46,7 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 
 # Modal
 IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
-    "vllm==0.6.2",
+    "vllm==0.6.2", "term-image==0.7.2"
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
@@ -105,13 +106,15 @@ class Model:
 
         import requests
         from PIL import Image
+        from term_image.image import from_file
         from vllm import SamplingParams
 
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        response = requests.get(request.get("image_url"), stream=True)
+        image_url = request.get("image_url")
+        response = requests.get(image_url, stream=True)
         response.raise_for_status()
         image = Image.open(response.raw).convert("RGB")
         prompt = f"<|image|><|begin_of_text|>{config['question']}"
@@ -132,6 +135,12 @@ class Model:
         generated_text = outputs[0].outputs[0].text.strip()
 
         # show the question, image, and response in the terminal for demonstration purposes
+        image_filename = image_url.split("/")[-1]
+        image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
+        with open(image_path, "wb") as file:
+            file.write(response.content)
+        terminal_image = from_file(image_path)
+        terminal_image.draw()
         print(
             Colors.BOLD,
             Colors.GREEN,
@@ -153,10 +162,10 @@ def main(
 
     model = Model()
 
-    response = requests.post(model.infer.web_url, json={"image_url": config["image_url"]})
+    response = requests.post(model.infer.web_url, json={"image_url": DEFAULT_IMG_URL})
     assert response.ok, response.status_code
 
     if twice:
         # second response is faster, because the Function is already running
-        response = requests.post(model.infer.web_url, json={"image_url": config["image_url"]})
+        response = requests.post(model.infer.web_url, json={"image_url": DEFAULT_IMG_URL})
         assert response.ok, response.status_code

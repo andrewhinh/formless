@@ -75,7 +75,7 @@ uvx twine upload dist/*
 Test the uploaded package:
 
 ```bash
-uv run --with formless --no-project -- formless -vv
+uv run --with formless --no-project -- formless -v
 ```
 
 ### Training
