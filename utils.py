@@ -3,9 +3,6 @@ import warnings
 from pathlib import PurePosixPath
 
 import modal
-from PIL import ImageFile
-
-ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 NAME = "formless"
 
@@ -26,28 +23,20 @@ VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
 CPU = 20  # cores (Modal max)
 
 MINUTES = 60  # seconds
-TIMEOUT = 24 * 60 * MINUTES
 
-DEPLOY_TIMEOUT = 2 * MINUTES
-DEPLOY_CONTAINER_IDLE_TIMEOUT = 5 * MINUTES
-DEPLOY_ALLOW_CONCURRENT_INPUTS = 100
+API_TIMEOUT = 5 * MINUTES
+API_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
+API_ALLOW_CONCURRENT_INPUTS = 1000  # max
+
+FE_TIMEOUT = 24 * 60 * MINUTES  # max
+FE_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
+FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
+
 
 IMAGE = (
     modal.Image.from_registry(  # start from an official NVIDIA CUDA image
         TAG, add_python=PYTHON_VERSION
-    )
-    .apt_install("git")  # add system dependencies
-    .pip_install(  # add Python dependencies
-        "vllm==0.6.2",
-        "hf_transfer==0.1.6",
-    )
-    .env(
-        {
-            "TOKENIZERS_PARALLELISM": "false",
-            "HUGGINGFACE_HUB_CACHE": f"/{PRETRAINED_VOLUME}",
-            "HF_HUB_ENABLE_HF_TRANSFER": "1",
-        }
-    )
+    ).apt_install("git")  # add system dependencies
 )
 
 

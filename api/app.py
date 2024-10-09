@@ -4,16 +4,22 @@ from pathlib import Path
 from uuid import uuid4
 
 import modal
+from PIL import ImageFile
 
-from api.utils import (
-    DEPLOY_ALLOW_CONCURRENT_INPUTS,
-    DEPLOY_CONTAINER_IDLE_TIMEOUT,
-    DEPLOY_TIMEOUT,
+from utils import (
+    API_ALLOW_CONCURRENT_INPUTS,
+    API_CONTAINER_IDLE_TIMEOUT,
+    API_TIMEOUT,
     IMAGE,
     NAME,
+    PRETRAINED_VOLUME,
     VOLUME_CONFIG,
     Colors,
 )
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+# -----------------------------------------------------------------------------
+
 
 only_download = False  # turn off gpu for initial download
 model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
@@ -41,6 +47,17 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 
 
 # Modal
+IMAGE = IMAGE.pip_install(  # add Python dependencies
+    "vllm==0.6.2",
+    "hf_transfer==0.1.6",
+).env(
+    {
+        "TOKENIZERS_PARALLELISM": "false",
+        "HUGGINGFACE_HUB_CACHE": f"/{PRETRAINED_VOLUME}",
+        "HF_HUB_ENABLE_HF_TRANSFER": "1",
+    }
+)
+
 GPU_TYPE = "H100"
 GPU_COUNT = 2
 GPU_SIZE = None  # options = None, "40GB", "80GB"
@@ -48,7 +65,7 @@ GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
-APP_NAME = f"{NAME}-deploy"
+APP_NAME = f"{NAME}-api"
 app = modal.App(name=APP_NAME)
 
 # -----------------------------------------------------------------------------
@@ -60,9 +77,9 @@ app = modal.App(name=APP_NAME)
     gpu=None if only_download else GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=[modal.Secret.from_dotenv(path=Path(__file__).parent)],
-    timeout=DEPLOY_TIMEOUT,
-    container_idle_timeout=DEPLOY_CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=DEPLOY_ALLOW_CONCURRENT_INPUTS,
+    timeout=API_TIMEOUT,
+    container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
+    allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
 )
 class Model:
     @modal.enter()  # what should a container do after it starts but before it gets input?
