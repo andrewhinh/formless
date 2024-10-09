@@ -2,7 +2,28 @@
 
 Handwritten + image OCR.
 
-## Set Up
+## Usage
+
+Hit the API:
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://andrewhinh--formless-api-model-infer.modal.run
+```
+
+Or use the CLI:
+
+```bash
+uv run formless -i <image-url> [-v]
+```
+
+Soon:
+
+- Python bindings.
+- Frontend.
+
+## Development
+
+### Set Up
 
 Set up the environment:
 
@@ -12,7 +33,7 @@ uv run pre-commit install
 modal setup
 ```
 
-## Repository Structure
+### Repository Structure
 
 ```bash
 .
@@ -21,8 +42,6 @@ modal setup
 ├── src/formless        # python bindings.
 ├── training            # training.
 ```
-
-## Development
 
 ### API
 
