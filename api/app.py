@@ -49,7 +49,7 @@ IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
     "vllm==0.6.2", "term-image==0.7.2"
 )
 API_TIMEOUT = 5 * MINUTES
-API_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
+API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
 API_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 GPU_TYPE = "H100"
