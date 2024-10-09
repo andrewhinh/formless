@@ -10,9 +10,8 @@ from utils import (
     API_ALLOW_CONCURRENT_INPUTS,
     API_CONTAINER_IDLE_TIMEOUT,
     API_TIMEOUT,
-    IMAGE,
+    GPU_IMAGE,
     NAME,
-    PRETRAINED_VOLUME,
     VOLUME_CONFIG,
     Colors,
 )
@@ -47,15 +46,8 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 
 
 # Modal
-IMAGE = IMAGE.pip_install(  # add Python dependencies
+IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
     "vllm==0.6.2",
-    "hf_transfer==0.1.6",
-).env(
-    {
-        "TOKENIZERS_PARALLELISM": "false",
-        "HUGGINGFACE_HUB_CACHE": f"/{PRETRAINED_VOLUME}",
-        "HF_HUB_ENABLE_HF_TRANSFER": "1",
-    }
 )
 
 GPU_TYPE = "H100"

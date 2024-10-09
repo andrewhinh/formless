@@ -7,21 +7,25 @@ from utils import (
     FE_ALLOW_CONCURRENT_INPUTS,
     FE_CONTAINER_IDLE_TIMEOUT,
     FE_TIMEOUT,
-    IMAGE,
     NAME,
+    PYTHON_VERSION,
 )
 
 # Modal
-IMAGE = IMAGE.pip_install(  # add Python dependencies
-    "python-fasthtml==0.6.10", "simpleicons==7.21.0"
-).copy_local_dir(Path(__file__).parent, "/root/")
+FE_IMAGE = (
+    modal.Image.debian_slim(python_version=PYTHON_VERSION)
+    .pip_install(  # add Python dependencies
+        "python-fasthtml==0.6.10", "simpleicons==7.21.0"
+    )
+    .copy_local_dir(Path(__file__).parent, "/root/")
+)
 
 APP_NAME = f"{NAME}-frontend"
 app = modal.App(APP_NAME)
 
 
 @app.function(
-    image=IMAGE,
+    image=FE_IMAGE,
     secrets=[modal.Secret.from_dotenv(path=Path(__file__).parent)],
     timeout=FE_TIMEOUT,
     container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,

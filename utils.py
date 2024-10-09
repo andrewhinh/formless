@@ -33,10 +33,21 @@ FE_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
 FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 
-IMAGE = (
+GPU_IMAGE = (
     modal.Image.from_registry(  # start from an official NVIDIA CUDA image
         TAG, add_python=PYTHON_VERSION
-    ).apt_install("git")  # add system dependencies
+    )
+    .apt_install("git")  # add system dependencies
+    .pip_install(  # add Python dependencies
+        "hf_transfer==0.1.6",
+    )
+    .env(
+        {
+            "TOKENIZERS_PARALLELISM": "false",
+            "HUGGINGFACE_HUB_CACHE": f"/{PRETRAINED_VOLUME}",
+            "HF_HUB_ENABLE_HF_TRANSFER": "1",
+        }
+    )
 )
 
 
