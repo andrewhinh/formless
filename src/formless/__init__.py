@@ -3,8 +3,6 @@ import os
 import tempfile
 import time
 from uuid import uuid4
-from dotenv import load_dotenv
-from pathlib import Path
 from term_image.image import from_file
 import requests
 from rich import print
@@ -12,10 +10,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 import typer
 from typing_extensions import Annotated
 
-from utils import DEFAULT_IMG_URL
 
-parent_path = Path(__file__).parent.parent.parent
-load_dotenv(parent_path / ".env")
+DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
+API_URL = "https://andrewhinh--formless-api-model-infer.modal.run"
 
 # Typer CLI
 app = typer.Typer(
@@ -26,9 +23,8 @@ state = {"verbose": False}
 
 # Fns
 def run() -> None:
-    api_url = os.getenv("API_URL")
     image_url = state["image_url"]
-    response = requests.post(api_url, json={"image_url": image_url})
+    response = requests.post(API_URL, json={"image_url": image_url})
     assert response.ok, response.status_code
     return response.json()
 

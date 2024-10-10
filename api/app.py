@@ -135,6 +135,7 @@ class Model:
         generated_text = outputs[0].outputs[0].text.strip()
 
         # show the question, image, and response in the terminal for demonstration purposes
+        response = requests.get(image_url)
         image_filename = image_url.split("/")[-1]
         image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
         with open(image_path, "wb") as file:
