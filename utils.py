@@ -6,6 +6,7 @@ import modal
 
 NAME = "formless"
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
+API_URL = "https://andrewhinh--formless-api-model-infer.modal.run"
 
 # Modal
 CUDA_VERSION = "12.4.0"
@@ -14,9 +15,11 @@ OS = "ubuntu22.04"
 TAG = f"nvidia/cuda:{CUDA_VERSION}-{FLAVOR}-{OS}"
 PYTHON_VERSION = "3.12"
 
+DATA_VOLUME = f"{NAME}-data"
 PRETRAINED_VOLUME = f"{NAME}-pretrained"
 RUNS_VOLUME = f"{NAME}-runs"
 VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
+    f"/{DATA_VOLUME}": modal.Volume.from_name(DATA_VOLUME, create_if_missing=True),
     f"/{PRETRAINED_VOLUME}": modal.Volume.from_name(PRETRAINED_VOLUME, create_if_missing=True),
     f"/{RUNS_VOLUME}": modal.Volume.from_name(RUNS_VOLUME, create_if_missing=True),
 }
