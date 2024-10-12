@@ -1,9 +1,10 @@
-import os
 from pathlib import Path
 
 import modal
 
 from utils import (
+    API_URL,
+    DATA_VOLUME,
     MINUTES,
     NAME,
     PYTHON_VERSION,
@@ -15,7 +16,7 @@ parent_path: Path = Path(__file__).parent
 FE_IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .pip_install(  # add Python dependencies
-        "python-fasthtml==0.6.10", "simpleicons==7.21.0"
+        "python-fasthtml==0.6.10", "simpleicons==7.21.0", "requests==2.32.3", "sqlite-utils==3.18"
     )
     .copy_local_dir(parent_path, "/root/")
 )
@@ -37,7 +38,11 @@ app = modal.App(APP_NAME)
     allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
 )
 @modal.asgi_app()
-def modal_get():
+def modal_get():  # noqa: C901
+    import os
+    import uuid
+
+    import requests
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
@@ -52,6 +57,39 @@ def modal_get():
         debug=os.getenv("DEBUG", False),
     )
     fh.setup_toasts(fasthtml_app)
+
+    # gens database for storing generated image details
+    os.makedirs(f"/{DATA_VOLUME}/frontend", exist_ok=True)
+    tables = fh.database(f"/{DATA_VOLUME}/frontend/gens.db").t
+    gens = tables.gens
+    if gens not in tables:
+        gens.create(image_url=str, response=str, session_id=str, id=int, folder=str, pk="id")
+    Generation = gens.dataclass()
+
+    # Show the image (if available) for a generation
+    def generation_preview(g, session):
+        if "session_id" not in session:
+            return "No session ID"
+        if g.session_id != session["session_id"]:
+            return "Wrong session ID!"
+        grid_cls = "box col-xs-12 col-sm-6 col-md-4 col-lg-3"
+        if g.response:
+            return fh.Div(
+                fh.Card(
+                    fh.Img(src=g.image_url, alt="Card image", cls="card-img-top"),
+                    fh.Div(fh.P(fh.B("Response: "), g.response, cls="card-text"), cls="card-body"),
+                ),
+                id=f"gen-{g.id}",
+                cls=grid_cls,
+            )
+        return fh.Div(
+            f"Scanning image '{g.image_url}'...",
+            id=f"gen-{g.id}",
+            hx_get=f"/gens/{g.id}",
+            hx_trigger="every 2s",
+            hx_swap="outerHTML",
+            cls=grid_cls,
+        )
 
     # Components
     def icon(
@@ -95,45 +133,28 @@ def modal_get():
             cls="flex justify-between p-4",
         )
 
-    def main_content():
+    def main_content(session):
+        gen_containers = [
+            generation_preview(g, session) for g in gens(limit=10, where=f"session_id == '{session['session_id']}'")
+        ]
         return fh.Main(
-            # fh.Div(
-            #     fh.Div(
-            #         fh.Label(
-            #             "Upload Image:",
-            #             fh.Input(
-            #                 type="file",
-            #                 id="file-input",
-            #                 accept="image/*",
-            #                 hx_post="/upload",
-            #                 hx_target="#image-panel",
-            #                 hx_swap="outerHTML",
-            #             ),
-            #             cls="flex flex-col gap-2",
-            #         ),
-            #         fh.Div(id="image-panel", cls="p-4 border border-gray-300"),
-            #         cls="w-1/2",
-            #     ),
-            #     fh.Div(
-            #         fh.P("OCR Results:", cls="text-lg font-bold"),
-            #         fh.Div(id="ocr-results", cls="p-4 border border-gray-300"),
-            #         cls="w-1/2",
-            #     ),
-            #     cls="flex justify-between",
-            # ),
-            # fh.Script(
-            #     "htmx.on('htmx:afterRequest', function(evt) {"
-            #     "  if (evt.detail.elt.id === 'file-input' && evt.detail.requestConfig.verb === 'post') {"
-            #     "    htmx.trigger('#toast-container', 'showToast', {detail: {message: 'Upload successful'}});"
-            #     "  }"
-            #     "});"
-            #     "htmx.on('htmx:beforeRequest', function(evt) {"
-            #     "  if (evt.detail.elt.id === 'file-input' && evt.detail.requestConfig.verb === 'post') {"
-            #     "    document.getElementById('ocr-results').innerHTML = '<div class=\"loading\">Processing...</div>';"
-            #     "  }"
-            #     "});"
-            # ),
-            # cls="flex flex-col gap-4 justify-center items-center flex-1",
+            fh.Form(
+                fh.Group(
+                    fh.Input(
+                        id="new-img-url",
+                        name="img_url",
+                        placeholder="Enter an image url",
+                        cls="text-blue-300 hover:text-blue-100 p-4 placeholder:text-blue-300",
+                    ),
+                    fh.Button("Scan"),
+                    cls="max-w-md self-center",
+                ),
+                hx_post="/",
+                target_id="gen-list",
+                hx_swap="afterbegin",
+            ),
+            fh.Div(*gen_containers[::-1], id="gen-list", cls="flex"),
+            cls="flex flex-col gap-4 p-4",
         )
 
     def footer():
@@ -149,18 +170,50 @@ def modal_get():
 
     # Routes
     @rt("/")
-    async def get():
+    async def home(session):
+        if "session_id" not in session:
+            session["session_id"] = str(uuid.uuid4())
         return fh.Title(NAME), fh.Div(
             nav(),
-            main_content(),
+            main_content(session),
             footer(),
             cls="flex flex-col justify-between min-h-screen bg-zinc-900 w-full",
         )
 
+    # A pending preview keeps polling this route until we return the image preview
+    @rt("/gens/{id}")
+    def preview(id: int, session):
+        return generation_preview(gens.get(id), session)
+
+    # For images, CSS, etc.
     @rt("/{fname:path}.{ext:static}")
     async def static_files(fname: str, ext: str):
         static_file_path = parent_path / f"{fname}.{ext}"
         if static_file_path.exists():
             return fh.FileResponse(static_file_path)
+
+    # Generation route
+    @fasthtml_app.post("/")
+    def post(image_url: str, session):
+        # Check for session ID
+        if "session_id" not in session:
+            return "No session ID"
+
+        clear_input = fh.Input(
+            id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
+        )
+
+        # Generate as before
+        g = gens.insert(Generation(image_url=image_url, session_id=session["session_id"]))
+        generate_and_save(g)
+
+        return generation_preview(g, session), clear_input
+
+    # Generate the response (in a separate thread)
+    @fh.threaded
+    def generate_and_save(g) -> None:
+        response = requests.post(API_URL, json={"image_url": g.image_url})
+        assert response.ok, response.status_code
+        g.response = response.json()
 
     return fasthtml_app
