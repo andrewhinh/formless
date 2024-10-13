@@ -3,7 +3,6 @@ from pathlib import Path
 import modal
 
 from utils import (
-    API_URL,
     DATA_VOLUME,
     MINUTES,
     NAME,
@@ -81,8 +80,8 @@ def modal_get():  # noqa: C901
         if g.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
+
         if g.response:
-            fh.add_toast(session, "Scan complete", "success")
             return (
                 fh.Card(
                     fh.Img(src=g.image_url, alt="Card image", cls="w-80 object-contain"),
@@ -164,12 +163,23 @@ def modal_get():  # noqa: C901
                         placeholder="Enter an image url",
                         cls="p-2",
                     ),
-                    fh.Button("Scan", cls="text-blue-300 hover:text-blue-100 p-2"),
+                    fh.Button(
+                        "Scan",
+                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                    ),
                 ),
                 hx_post="/",
                 target_id="gen-list",
                 hx_swap="afterbegin",
                 cls="w-2/3",
+            ),
+            fh.Button(
+                "Clear all",
+                id="clear-all",
+                hx_post="/clear",
+                target_id="gen-list",
+                hx_swap="innerHTML",
+                cls=f"text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 {'hidden' if not gen_containers else ''}",
             ),
             fh.Div(*gen_containers[::-1], id="gen-list", cls="flex flex-col justify-center items-center gap-4"),
             cls="flex flex-col justify-center items-center gap-4",
@@ -222,7 +232,7 @@ def modal_get():  # noqa: C901
 
     ## generation route
     @f_app.post("/")
-    def generate(image_url: str, session):
+    def generate(session, image_url: str = None):
         # Check for session ID
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -239,19 +249,58 @@ def modal_get():  # noqa: C901
         clear_input = fh.Input(
             id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
         )
+        clear_button = (
+            fh.Button(
+                "Clear all",
+                id="clear-all",
+                hx_post="/clear",
+                target_id="gen-list",
+                hx_swap="innerHTML",
+                hx_swap_oob="true",
+                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
+            ),
+        )
 
         # Generate as before
         g = gens.insert(Generation(image_url=image_url, session_id=session["session_id"]))
         generate_and_save(g)
 
-        return generation_preview(g, session), clear_input
+        return generation_preview(g, session), clear_input, clear_button
 
     ## generate the response (in a separate thread)
     @fh.threaded
     def generate_and_save(g) -> None:
-        response = requests.post(API_URL, json={"image_url": g.image_url})
-        assert response.ok, response.status_code
-        g.response = response.json()
+        # response = requests.post(API_URL, json={"image_url": g.image_url})
+        # assert response.ok, response.status_code
+        # g.response = response.json()
+        # TODO: uncomment for debugging
+        g.response = "temp"
         gens.update(g)
 
+    ## clear all
+    @f_app.post("/clear")
+    def clear_all(session):
+        ids = [g.id for g in gens(where=f"session_id == '{session['session_id']}'")]
+        for id in ids:
+            gens.delete(id)
+        clear_button = (
+            fh.Button(
+                "Clear all",
+                id="clear-all",
+                hx_post="/clear",
+                target_id="gen-list",
+                hx_swap="innerHTML",
+                hx_swap_oob="true",
+                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
+            ),
+        )
+        return None, clear_button
+
     return f_app
+
+
+# TODO:
+# - add stripe
+# - add export to csv
+# - add user authentication
+# - add error reporting
