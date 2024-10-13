@@ -8,6 +8,7 @@ from utils import (
     MINUTES,
     NAME,
     PYTHON_VERSION,
+    VOLUME_CONFIG,
 )
 
 parent_path: Path = Path(__file__).parent
@@ -36,6 +37,7 @@ app = modal.App(APP_NAME)
     timeout=FE_TIMEOUT,
     container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
     allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
+    volumes=VOLUME_CONFIG,
 )
 @modal.asgi_app()
 def modal_get():  # noqa: C901
@@ -46,7 +48,8 @@ def modal_get():  # noqa: C901
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
-    fasthtml_app, rt = fh.fast_app(
+    # FastHTML setup
+    f_app, _ = fh.fast_app(
         ws_hdr=True,
         hdrs=[
             fh.Script(src="https://cdn.tailwindcss.com"),
@@ -56,9 +59,11 @@ def modal_get():  # noqa: C901
         live=os.getenv("LIVE", False),
         debug=os.getenv("DEBUG", False),
     )
-    fh.setup_toasts(fasthtml_app)
+    fh.setup_toasts(f_app)
 
-    # gens database for storing generated image details
+    # database
+    # TODO: uncomment for debugging
+    # os.remove(f"/{DATA_VOLUME}/frontend/gens.db")
     os.makedirs(f"/{DATA_VOLUME}/frontend", exist_ok=True)
     tables = fh.database(f"/{DATA_VOLUME}/frontend/gens.db").t
     gens = tables.gens
@@ -66,32 +71,43 @@ def modal_get():  # noqa: C901
         gens.create(image_url=str, response=str, session_id=str, id=int, folder=str, pk="id")
     Generation = gens.dataclass()
 
-    # Show the image (if available) for a generation
+    # preview while waiting for response
     def generation_preview(g, session):
         if "session_id" not in session:
-            return "No session ID"
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
         if g.session_id != session["session_id"]:
-            return "Wrong session ID!"
-        grid_cls = "box col-xs-12 col-sm-6 col-md-4 col-lg-3"
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
         if g.response:
-            return fh.Div(
+            fh.add_toast(session, "Scan complete", "success")
+            return (
                 fh.Card(
-                    fh.Img(src=g.image_url, alt="Card image", cls="card-img-top"),
-                    fh.Div(fh.P(fh.B("Response: "), g.response, cls="card-text"), cls="card-body"),
+                    fh.Img(src=g.image_url, alt="Card image", cls="w-80 object-contain"),
+                    fh.P(
+                        g.response,
+                        onclick="navigator.clipboard.writeText(this.innerText);",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-blue-300 hover:text-blue-100 cursor-pointer",
+                        title="Click to copy",
+                    ),
+                    cls="w-2/3 flex flex-col justify-center items-center gap-4",
+                    id=f"gen-{g.id}",
                 ),
-                id=f"gen-{g.id}",
-                cls=grid_cls,
             )
-        return fh.Div(
-            f"Scanning image '{g.image_url}'...",
+        return fh.Card(
+            fh.Img(src=g.image_url, alt="Card image", cls="w-80 object-contain"),
+            fh.P("Scanning image ..."),
+            cls="w-2/3 flex flex-col justify-center items-center gap-4",
             id=f"gen-{g.id}",
             hx_get=f"/gens/{g.id}",
             hx_trigger="every 2s",
             hx_swap="outerHTML",
-            cls=grid_cls,
         )
 
-    # Components
+    # components
     def icon(
         svg,
         width="35",
@@ -109,7 +125,7 @@ def modal_get():  # noqa: C901
             cls=cls,
         )
 
-    # Layout
+    # layout
     def nav():
         return fh.Nav(
             fh.A(
@@ -141,25 +157,28 @@ def modal_get():  # noqa: C901
             fh.Form(
                 fh.Group(
                     fh.Input(
-                        id="new-img-url",
-                        name="img_url",
+                        id="new-image-url",
+                        name="image_url",
                         placeholder="Enter an image url",
-                        cls="text-blue-300 hover:text-blue-100 p-4 placeholder:text-blue-300",
+                        cls="p-2",
                     ),
-                    fh.Button("Scan"),
-                    cls="max-w-md self-center",
+                    fh.Button("Scan", cls="text-blue-300 hover:text-blue-100 p-2"),
                 ),
                 hx_post="/",
                 target_id="gen-list",
                 hx_swap="afterbegin",
+                cls="w-2/3",
             ),
-            fh.Div(*gen_containers[::-1], id="gen-list", cls="flex"),
-            cls="flex flex-col gap-4 p-4",
+            fh.Div(*gen_containers[::-1], id="gen-list", cls="flex flex-col justify-center items-center gap-4"),
+            cls="flex flex-col justify-center items-center gap-4",
         )
+
+    def toast_container():
+        return fh.Div(id="toast-container", cls="hidden")
 
     def footer():
         return fh.Footer(
-            fh.P("Made by", cls="text-white text-lg"),
+            fh.P("Made by", cls="text-lg"),
             fh.A(
                 "Andrew Hinh",
                 href="https://andrewhinh.github.io/",
@@ -168,36 +187,52 @@ def modal_get():  # noqa: C901
             cls="justify-end text-right p-4",
         )
 
-    # Routes
-    @rt("/")
+    # routes
+    @f_app.get("/")
     async def home(session):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
         return fh.Title(NAME), fh.Div(
             nav(),
             main_content(session),
+            toast_container(),
             footer(),
-            cls="flex flex-col justify-between min-h-screen bg-zinc-900 w-full",
+            cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
         )
 
-    # A pending preview keeps polling this route until we return the image preview
-    @rt("/gens/{id}")
+    ## pending preview keeps polling this route until we return the image preview
+    @f_app.get("/gens/{id}")
     def preview(id: int, session):
         return generation_preview(gens.get(id), session)
 
-    # For images, CSS, etc.
-    @rt("/{fname:path}.{ext:static}")
+    ## toasts without target
+    @f_app.post("/toast")
+    async def toast(session, message: str, type: str):
+        fh.add_toast(session, message, type)
+        return fh.Div(id="toast-container", cls="hidden")
+
+    ## for images, CSS, etc.
+    @f_app.get("/{fname:path}.{ext:static}")
     async def static_files(fname: str, ext: str):
         static_file_path = parent_path / f"{fname}.{ext}"
         if static_file_path.exists():
             return fh.FileResponse(static_file_path)
 
-    # Generation route
-    @fasthtml_app.post("/")
-    def post(image_url: str, session):
+    ## generation route
+    @f_app.post("/")
+    def generate(image_url: str, session):
         # Check for session ID
         if "session_id" not in session:
-            return "No session ID"
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
+
+        # Check image URL
+        if not image_url:
+            fh.add_toast(session, "No image URL provided", "error")
+            return None
+        if requests.head(image_url).headers["content-type"] not in ("image/png", "image/jpeg", "image/jpg"):
+            fh.add_toast(session, "Invalid image URL", "error")
+            return None
 
         clear_input = fh.Input(
             id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
@@ -209,11 +244,12 @@ def modal_get():  # noqa: C901
 
         return generation_preview(g, session), clear_input
 
-    # Generate the response (in a separate thread)
+    ## generate the response (in a separate thread)
     @fh.threaded
     def generate_and_save(g) -> None:
         response = requests.post(API_URL, json={"image_url": g.image_url})
         assert response.ok, response.status_code
         g.response = response.json()
+        gens.update(g)
 
-    return fasthtml_app
+    return f_app
