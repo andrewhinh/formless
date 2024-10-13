@@ -62,10 +62,12 @@ def modal_get():  # noqa: C901
     fh.setup_toasts(f_app)
 
     # database
+    in_prod = not os.getenv("LIVE", False) and not os.getenv("DEBUG", False)
+    db_path = f"/{DATA_VOLUME}/frontend/gens.db" if in_prod else f"/{DATA_VOLUME}/frontend/gens_dev.db"
     # TODO: uncomment for debugging
-    # os.remove(f"/{DATA_VOLUME}/frontend/gens.db")
+    # os.remove(db_path)
     os.makedirs(f"/{DATA_VOLUME}/frontend", exist_ok=True)
-    tables = fh.database(f"/{DATA_VOLUME}/frontend/gens.db").t
+    tables = fh.database(db_path).t
     gens = tables.gens
     if gens not in tables:
         gens.create(image_url=str, response=str, session_id=str, id=int, folder=str, pk="id")
