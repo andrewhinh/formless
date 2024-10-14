@@ -11,12 +11,15 @@ from utils import (
 )
 
 parent_path: Path = Path(__file__).parent
+prod = False
+# Global balance (NB: resets every restart)
+global_balance = 100
 
 # Modal
 FE_IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .pip_install(  # add Python dependencies
-        "python-fasthtml==0.6.10", "simpleicons==7.21.0", "requests==2.32.3", "sqlite-utils==3.18"
+        "python-fasthtml==0.6.10", "simpleicons==7.21.0", "requests==2.32.3", "sqlite-utils==3.18", "stripe==11.1.0"
     )
     .copy_local_dir(parent_path, "/root/")
 )
@@ -32,7 +35,7 @@ app = modal.App(APP_NAME)
 
 @app.function(
     image=FE_IMAGE,
-    secrets=[modal.Secret.from_dotenv(path=parent_path)],
+    secrets=[modal.Secret.from_dotenv(path=parent_path, filename=".env" if prod else ".env.dev")],
     timeout=FE_TIMEOUT,
     container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
     allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
@@ -44,6 +47,7 @@ def modal_get():  # noqa: C901
     import uuid
 
     import requests
+    import stripe
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
@@ -71,6 +75,11 @@ def modal_get():  # noqa: C901
     if gens not in tables:
         gens.create(image_url=str, response=str, session_id=str, id=int, folder=str, pk="id")
     Generation = gens.dataclass()
+
+    # Stripe
+    stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+    webhook_secret = os.environ["STRIPE_WEBHOOK_SECRET"]
+    DOMAIN: str = os.environ["DOMAIN"]
 
     # preview while waiting for response
     def generation_preview(g, session):
@@ -190,13 +199,17 @@ def modal_get():  # noqa: C901
 
     def footer():
         return fh.Footer(
-            fh.P("Made by", cls="text-lg"),
-            fh.A(
-                "Andrew Hinh",
-                href="https://andrewhinh.github.io/",
-                cls="text-blue-300 text-lg font-bold hover:text-blue-100",
+            get_balance(),  # Live-updating balance
+            fh.Div(
+                fh.P("Made by"),
+                fh.A(
+                    "Andrew Hinh",
+                    href="https://andrewhinh.github.io/",
+                    cls="font-bold text-blue-300 hover:text-blue-100",
+                ),
+                cls="flex flex-col text-right gap-0.5",
             ),
-            cls="justify-end text-right p-4",
+            cls="flex justify-between p-4 text-lg",
         )
 
     # routes
@@ -216,6 +229,26 @@ def modal_get():  # noqa: C901
     @f_app.get("/gens/{id}")
     def preview(id: int, session):
         return generation_preview(gens.get(id), session)
+
+    ## Likewise we poll to keep the balance updated
+    @f_app.get("/balance")
+    def get_balance():
+        return fh.Div(
+            fh.Div(
+                fh.P("Global balance:"),
+                fh.P(f"{global_balance} credits", cls="font-bold"),
+                cls="flex gap-1",
+            ),
+            fh.P(
+                fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
+                " to share ($1)",
+            ),
+            id="balance",
+            hx_get="/balance",
+            hx_trigger="every 2s",
+            hx_swap="outerHTML",
+            cls="flex flex-col gap-0.5",
+        )
 
     ## toasts without target
     @f_app.post("/toast")
@@ -246,6 +279,17 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "Invalid image URL", "error")
             return None
 
+        global global_balance
+
+        # Warn if we're out of balance
+        if global_balance < 1:
+            fh.add_toast(session, "Out of balance!", "error")
+            return None
+
+        # Decrement balance
+        global_balance -= 1
+
+        # Clear input and button
         clear_input = fh.Input(
             id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
         )
@@ -296,11 +340,77 @@ def modal_get():  # noqa: C901
         )
         return None, clear_button
 
+    ## We send the user here to buy credits
+    @f_app.get("/buy_global")
+    def buy_credits(session):
+        if "session_id" not in session:
+            return "Error no session id"
+
+        # Create Stripe Checkout Session
+        s = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": 100,
+                        "product_data": {
+                            "name": "Buy 50 credits for $1 (to share)",
+                        },
+                    },
+                    "quantity": 1,
+                }
+            ],
+            mode="payment",
+            success_url=DOMAIN + "/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=DOMAIN + "/cancel",
+        )
+
+        # Send the USER to STRIPE
+        return fh.RedirectResponse(s["url"])
+
+    ## STRIPE sends the USER here after a payment was canceled.
+    @f_app.get("/cancel")
+    def cancel():
+        return fh.RedirectResponse("/")
+
+    ## STRIPE sends the USER here after a payment was 'successful'.
+    @f_app.get("/success")
+    def success():
+        return fh.RedirectResponse("/")
+
+    ## STRIPE calls this to tell APP when a payment was completed.
+    @f_app.post("/webhook")
+    async def stripe_webhook(request):
+        global global_balance
+        print(request)
+        print("Received webhook")
+        payload = await request.body()
+        payload = payload.decode("utf-8")
+        signature = request.headers.get("stripe-signature")
+        print(payload)
+
+        # Verify the Stripe webhook signature
+        try:
+            event = stripe.Webhook.construct_event(payload, signature, webhook_secret)
+        except ValueError:
+            print("Invalid payload")
+            return {"error": "Invalid payload"}, 400
+        except stripe.error.SignatureVerificationError:
+            print("Invalid signature")
+            return {"error": "Invalid signature"}, 400
+
+        # Handle the event
+        if event["type"] == "checkout.session.completed":
+            session = event["data"]["object"]
+            print("Session completed", session)
+            global_balance += 50
+            return {"status": "success"}, 200
+
     return f_app
 
 
 # TODO:
-# - add stripe
 # - add export to csv
 # - add user authentication
 # - add error reporting

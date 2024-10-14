@@ -65,6 +65,12 @@ Run the web app:
 modal serve frontend/app.py
 ```
 
+Run Stripe local webhook listener:
+
+```bash
+stripe listen --forward-to <url>/webhook
+```
+
 Deploy:
 
 ```bash

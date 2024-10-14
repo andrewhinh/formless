@@ -199,6 +199,7 @@ cython_debug/
 #.idea/
 
 .vscode
+.env.*
 
 # FastHTML
 .sesskey
