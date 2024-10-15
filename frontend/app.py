@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import modal
@@ -11,9 +12,9 @@ from utils import (
 )
 
 parent_path: Path = Path(__file__).parent
-prod = False
 # Global balance (NB: resets every restart)
 global_balance = 100
+in_prod = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
 
 # Modal
 FE_IMAGE = (
@@ -35,7 +36,7 @@ app = modal.App(APP_NAME)
 
 @app.function(
     image=FE_IMAGE,
-    secrets=[modal.Secret.from_dotenv(path=parent_path, filename=".env" if prod else ".env.dev")],
+    secrets=[modal.Secret.from_dotenv(path=parent_path, filename=".env" if in_prod else ".env.dev")],
     timeout=FE_TIMEOUT,
     container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
     allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
@@ -43,7 +44,6 @@ app = modal.App(APP_NAME)
 )
 @modal.asgi_app()
 def modal_get():  # noqa: C901
-    import os
     import uuid
 
     import requests
@@ -65,7 +65,6 @@ def modal_get():  # noqa: C901
     fh.setup_toasts(f_app)
 
     # database
-    in_prod = not os.getenv("LIVE", False) and not os.getenv("DEBUG", False)
     db_path = f"/{DATA_VOLUME}/frontend/gens.db" if in_prod else f"/{DATA_VOLUME}/frontend/gens_dev.db"
     # TODO: uncomment for debugging
     # os.remove(db_path)
@@ -73,7 +72,7 @@ def modal_get():  # noqa: C901
     tables = fh.database(db_path).t
     gens = tables.gens
     if gens not in tables:
-        gens.create(image_url=str, response=str, session_id=str, id=int, folder=str, pk="id")
+        gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
 
     # Stripe
@@ -190,6 +189,23 @@ def modal_get():  # noqa: C901
                 hx_swap="innerHTML",
                 cls=f"text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 {'hidden' if not gen_containers else ''}",
             ),
+            # fh.Div(
+            #     fh.Button(
+            #         "Clear all",
+            #         id="clear-all",
+            #         hx_post="/clear",
+            #         target_id="gen-list",
+            #         hx_swap="innerHTML",
+            #         cls=f"text-red-300 hover:text-red-100 p-2 w-full border-red-300 border-2 hover:border-red-100 {'hidden' if not gen_containers else ''}",
+            #     ),
+            #     fh.Button(
+            #         "Export to CSV",
+            #         id="export-csv",
+            #         hx_get="/export",
+            #         cls=f"text-green-300 hover:text-green-100 p-2 w-full border-green-300 border-2 hover:border-green-100 {'hidden' if not gen_containers else ''}",
+            #     ),
+            #     cls="flex justify-center gap-4 w-2/3",
+            # ),
             fh.Div(*gen_containers[::-1], id="gen-list", cls="flex flex-col justify-center items-center gap-4"),
             cls="flex flex-col justify-center items-center gap-4",
         )
@@ -293,7 +309,7 @@ def modal_get():  # noqa: C901
         clear_input = fh.Input(
             id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
         )
-        clear_button = (
+        clear_c_button = (
             fh.Button(
                 "Clear all",
                 id="clear-all",
@@ -304,21 +320,29 @@ def modal_get():  # noqa: C901
                 cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
             ),
         )
+        # clear_e_button = (
+        #     fh.Button(
+        #         "Export to CSV",
+        #         id="export-csv",
+        #         hx_get="/export",
+        #         cls="text-green-300 hover:text-green-100 p-2 w-1/3 border-green-300 border-2 hover:border-green-100",
+        #     ),
+        # )
 
         # Generate as before
         g = gens.insert(Generation(image_url=image_url, session_id=session["session_id"]))
         generate_and_save(g)
 
-        return generation_preview(g, session), clear_input, clear_button
+        return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
 
     ## generate the response (in a separate thread)
     @fh.threaded
     def generate_and_save(g) -> None:
-        # response = requests.post(API_URL, json={"image_url": g.image_url})
-        # assert response.ok, response.status_code
-        # g.response = response.json()
+        response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url})
+        assert response.ok, response.status_code
+        g.response = response.json()
         # TODO: uncomment for debugging
-        g.response = "temp"
+        # g.response = "temp"
         gens.update(g)
 
     ## clear all
@@ -339,6 +363,17 @@ def modal_get():  # noqa: C901
             ),
         )
         return None, clear_button
+
+    # ## export to CSV
+    # @f_app.get("/export")
+    # def export(session):
+    #     output = io.StringIO()
+    #     writer = csv.writer(output)
+    #     writer.writerow(["image_url", "response"])
+    #     for g in gens(where=f"session_id == '{session['session_id']}'"):
+    #         writer.writerow([g.image_url, g.response])
+
+    #     return fh.FileResponse(output.getvalue(), headers={"Content-Disposition": "attachment; filename=export.csv"})
 
     ## We send the user here to buy credits
     @f_app.get("/buy_global")
@@ -412,5 +447,6 @@ def modal_get():  # noqa: C901
 
 # TODO:
 # - add export to csv
+# - replace polling routes with websockets
 # - add user authentication
 # - add error reporting

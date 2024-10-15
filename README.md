@@ -45,21 +45,33 @@ modal setup
 
 ### API
 
-Run the API:
+Test the API:
 
 ```bash
 modal run api/app.py
 ```
 
-Deploy:
+Run the API "locally":
 
 ```bash
-modal deploy api/app.py
+modal serve api/app.py
+```
+
+Deploy on dev:
+
+```bash
+modal deploy --env=dev api/app.py
+```
+
+Deploy on main:
+
+```bash
+modal deploy --env=main api/app.py
 ```
 
 ### Frontend
 
-Run the web app:
+Run the web app "locally":
 
 ```bash
 modal serve frontend/app.py
@@ -71,10 +83,16 @@ Run Stripe local webhook listener:
 stripe listen --forward-to <url>/webhook
 ```
 
-Deploy:
+Deploy on dev:
 
 ```bash
-modal deploy frontend/app.py
+modal deploy --env=dev frontend/app.py
+```
+
+Deploy on main:
+
+```bash
+modal deploy --env=main frontend/app.py
 ```
 
 ### PyPI

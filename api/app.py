@@ -16,6 +16,7 @@ from utils import (
     Colors,
 )
 
+parent_path: Path = Path(__file__).parent
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 # -----------------------------------------------------------------------------
 
@@ -62,6 +63,8 @@ if GPU_TYPE.lower() == "a100":
 APP_NAME = f"{NAME}-api"
 app = modal.App(name=APP_NAME)
 
+in_prod = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
+
 # -----------------------------------------------------------------------------
 
 
@@ -70,7 +73,7 @@ app = modal.App(name=APP_NAME)
     image=IMAGE,
     gpu=None if only_download else GPU_CONFIG,
     volumes=VOLUME_CONFIG,
-    secrets=[modal.Secret.from_dotenv(path=Path(__file__).parent)],
+    secrets=[modal.Secret.from_dotenv(path=parent_path, filename=".env" if in_prod else ".env.dev")],
     timeout=API_TIMEOUT,
     container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
     allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
