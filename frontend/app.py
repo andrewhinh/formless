@@ -12,8 +12,6 @@ from utils import (
 )
 
 parent_path: Path = Path(__file__).parent
-# Global balance (NB: resets every restart)
-global_balance = 100
 in_prod = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
 
 # Modal
@@ -74,6 +72,20 @@ def modal_get():  # noqa: C901
     if gens not in tables:
         gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
+
+    ## write global balance to db
+    init_balance = 100
+    global_balance = tables.global_balance
+    if global_balance not in tables:
+        global_balance.create(balance=int, pk="id")
+    Balance = global_balance.dataclass()
+
+    def get_curr_balance():
+        try:
+            return global_balance.get(1)
+        except Exception:
+            global_balance.insert(Balance(balance=init_balance))
+            return global_balance.get(1)
 
     # Stripe
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
@@ -249,10 +261,11 @@ def modal_get():  # noqa: C901
     ## Likewise we poll to keep the balance updated
     @f_app.get("/balance")
     def get_balance():
+        curr_balance = get_curr_balance()
         return fh.Div(
             fh.Div(
                 fh.P("Global balance:"),
-                fh.P(f"{global_balance} credits", cls="font-bold"),
+                fh.P(f"{curr_balance.balance} credits", cls="font-bold"),
                 cls="flex gap-1",
             ),
             fh.P(
@@ -295,15 +308,15 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "Invalid image URL", "error")
             return None
 
-        global global_balance
-
         # Warn if we're out of balance
-        if global_balance < 1:
+        curr_balance = get_curr_balance()
+        if curr_balance.balance < 1:
             fh.add_toast(session, "Out of balance!", "error")
             return None
 
         # Decrement balance
-        global_balance -= 1
+        curr_balance.balance -= 1
+        global_balance.update(curr_balance)
 
         # Clear input and button
         clear_input = fh.Input(
@@ -417,7 +430,6 @@ def modal_get():  # noqa: C901
     ## STRIPE calls this to tell APP when a payment was completed.
     @f_app.post("/webhook")
     async def stripe_webhook(request):
-        global global_balance
         print(request)
         print("Received webhook")
         payload = await request.body()
@@ -439,7 +451,9 @@ def modal_get():  # noqa: C901
         if event["type"] == "checkout.session.completed":
             session = event["data"]["object"]
             print("Session completed", session)
-            global_balance += 50
+            curr_balance = get_curr_balance()
+            curr_balance.balance += 50
+            global_balance.update(curr_balance)
             return {"status": "success"}, 200
 
     return f_app
