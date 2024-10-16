@@ -54,7 +54,7 @@ modal run api/app.py
 Run the API "locally":
 
 ```bash
-modal serve api/app.py
+modal serve --env=dev api/app.py
 ```
 
 Deploy on dev:
@@ -74,13 +74,9 @@ modal deploy --env=main api/app.py
 Run the web app "locally":
 
 ```bash
-modal serve frontend/app.py
-```
-
-Run Stripe local webhook listener:
-
-```bash
+modal serve --env=dev frontend/app.py
 stripe listen --forward-to <url>/webhook
+# update STRIPE_WEBHOOK_SECRET and DOMAIN in .env.dev
 ```
 
 Deploy on dev:
