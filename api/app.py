@@ -5,9 +5,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import modal
+from fastapi import HTTPException, Security
+from fastapi.security import APIKeyHeader
 from PIL import ImageFile
 
 from utils import (
+    DATA_VOLUME,
     DEFAULT_IMG_URL,
     GPU_IMAGE,
     MINUTES,
@@ -19,7 +22,6 @@ from utils import (
 parent_path: Path = Path(__file__).parent
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 # -----------------------------------------------------------------------------
-
 
 only_download = False  # turn off gpu for initial download
 model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
@@ -47,7 +49,7 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 
 # Modal
 IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
-    "vllm==0.6.2", "term-image==0.7.2"
+    "vllm==0.6.2", "term-image==0.7.2", "python-fasthtml==0.6.10", "sqlite-utils==3.18"
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
@@ -102,8 +104,24 @@ class Model:
             tensor_parallel_size=GPU_COUNT,
         )
 
+    async def verify_api_key(
+        self,
+        api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
+    ) -> bool:
+        from fasthtml import common as fh
+
+        db_path = f"/{DATA_VOLUME}/main.db"
+        tables = fh.database(db_path).t
+        api_keys = tables.api_keys
+        if api_keys not in tables:
+            raise ValueError("api_keys table not found")
+
+        if api_key_header in api_keys:
+            return True
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
     @modal.web_endpoint(method="POST")
-    async def infer(self, request: dict) -> str:
+    async def infer(self, request: dict, api_key: bool = Security(verify_api_key)) -> str:
         if config["only_download"]:
             return ""
 
@@ -166,10 +184,14 @@ def main(
 
     model = Model()
 
-    response = requests.post(model.infer.web_url, json={"image_url": DEFAULT_IMG_URL})
+    response = requests.post(
+        model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": os.getenv("API_KEY")}
+    )
     assert response.ok, response.status_code
 
     if twice:
         # second response is faster, because the Function is already running
-        response = requests.post(model.infer.web_url, json={"image_url": DEFAULT_IMG_URL})
+        response = requests.post(
+            model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": os.getenv("API_KEY")}
+        )
         assert response.ok, response.status_code
