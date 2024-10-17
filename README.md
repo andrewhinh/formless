@@ -33,6 +33,23 @@ uvx pre-commit install
 modal setup
 ```
 
+Create a `.env` (+ `.env.dev` + `.env.local`):
+
+```bash
+API_URL=
+HF_TOKEN=
+
+LIVE=
+DEBUG=
+STRIPE_PUBLISHABLE_KEY=
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+DOMAIN=
+
+WANDB_API_KEY=
+WANDB_ENTITY=
+```
+
 ### Repository Structure
 
 ```bash
