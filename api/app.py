@@ -11,6 +11,7 @@ from PIL import ImageFile
 
 from utils import (
     DATA_VOLUME,
+    DEFAULT_API_KEY,
     DEFAULT_IMG_URL,
     GPU_IMAGE,
     MINUTES,
@@ -32,7 +33,7 @@ enforce_eager = True
 
 question = "What is the content of this image?"
 temperature = 0.2
-max_tokens = 128
+max_tokens = 1024
 
 # -----------------------------------------------------------------------------
 
@@ -105,7 +106,6 @@ class Model:
         )
 
     async def verify_api_key(
-        self,
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
         from fasthtml import common as fh
@@ -113,9 +113,6 @@ class Model:
         db_path = f"/{DATA_VOLUME}/main.db"
         tables = fh.database(db_path).t
         api_keys = tables.api_keys
-        if api_keys not in tables:
-            raise ValueError("api_keys table not found")
-
         if api_key_header in api_keys:
             return True
         raise HTTPException(status_code=401, detail="Could not validate credentials")
@@ -185,13 +182,13 @@ def main(
     model = Model()
 
     response = requests.post(
-        model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": os.getenv("API_KEY")}
+        model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": DEFAULT_API_KEY}
     )
     assert response.ok, response.status_code
 
     if twice:
         # second response is faster, because the Function is already running
         response = requests.post(
-            model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": os.getenv("API_KEY")}
+            model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": DEFAULT_API_KEY}
         )
         assert response.ok, response.status_code

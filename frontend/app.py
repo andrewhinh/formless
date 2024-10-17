@@ -63,15 +63,20 @@ def modal_get():  # noqa: C901
     fh.setup_toasts(f_app)
 
     # database
-    db_path = f"/{DATA_VOLUME}/frontend/gens.db" if in_prod else f"/{DATA_VOLUME}/frontend/gens_dev.db"
+    db_path = f"/{DATA_VOLUME}/main.db"
     # TODO: uncomment for debugging
     # os.remove(db_path)
-    os.makedirs(f"/{DATA_VOLUME}/frontend", exist_ok=True)
     tables = fh.database(db_path).t
     gens = tables.gens
     if gens not in tables:
         gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
+
+    ## generate api key linked to session id
+    api_keys = tables.api_keys
+    if api_keys not in tables:
+        api_keys.create(api_key=str, pk="api_key")
+    ApiKey = api_keys.dataclass()
 
     ## write global balance to db
     init_balance = 100
@@ -351,9 +356,13 @@ def modal_get():  # noqa: C901
     ## generate the response (in a separate thread)
     @fh.threaded
     def generate_and_save(g) -> None:
-        response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url})
-        assert response.ok, response.status_code
-        g.response = response.json()
+        api_key = str(uuid.uuid4())
+        api_keys.insert(ApiKey(api_key=api_key, session_id=g.session_id))
+        response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key})
+        if not response.ok:
+            g.response = "Failed with status code: " + str(response.status_code)
+        else:
+            g.response = response.json()
         # TODO: uncomment for debugging
         # g.response = "temp"
         gens.update(g)
@@ -463,4 +472,5 @@ def modal_get():  # noqa: C901
 # - add export to csv
 # - replace polling routes with websockets
 # - add user authentication
+# - add api key management
 # - add error reporting
