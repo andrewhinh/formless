@@ -93,7 +93,7 @@ Run the web app "locally":
 ```bash
 modal serve --env=dev frontend/app.py
 stripe listen --forward-to <url>/webhook
-# update STRIPE_WEBHOOK_SECRET and DOMAIN in .env.dev
+# update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
 
 Deploy on dev:
