@@ -357,7 +357,7 @@ def modal_get():  # noqa: C901
     @fh.threaded
     def generate_and_save(g) -> None:
         api_key = str(uuid.uuid4())
-        api_keys.insert(ApiKey(api_key=api_key, session_id=g.session_id))
+        api_keys.insert(ApiKey(api_key=api_key))
         response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key})
         if not response.ok:
             g.response = "Failed with status code: " + str(response.status_code)
