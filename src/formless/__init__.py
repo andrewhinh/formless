@@ -13,6 +13,7 @@ from typing_extensions import Annotated
 
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
 API_URL = "https://andrewhinh--formless-api-model-infer.modal.run"
+DEFAULT_API_KEY = "ff3ecd93-9a4e-4df6-bc86-4769aef639b1"
 
 # Typer CLI
 app = typer.Typer(
@@ -24,7 +25,7 @@ state = {"verbose": False}
 # Fns
 def run() -> None:
     image_url = state["image_url"]
-    response = requests.post(API_URL, json={"image_url": image_url})
+    response = requests.post(API_URL, json={"image_url": image_url}, headers={"X-API-Key": DEFAULT_API_KEY})
     assert response.ok, response.status_code
     return response.json()
 
@@ -89,5 +90,5 @@ def main(
 
 
 # TODO:
-# - Add API key
+# - Add command to generate API key
 # - Add more CLI options
