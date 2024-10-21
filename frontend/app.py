@@ -72,12 +72,6 @@ def modal_get():  # noqa: C901
         gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
 
-    ## generate api key linked to session id
-    api_keys = tables.api_keys
-    if api_keys not in tables:
-        api_keys.create(api_key=str, pk="api_key")
-    ApiKey = api_keys.dataclass()
-
     ## write global balance to db
     init_balance = 100
     global_balance = tables.global_balance
@@ -356,13 +350,18 @@ def modal_get():  # noqa: C901
     ## generate the response (in a separate thread)
     @fh.threaded
     def generate_and_save(g) -> None:
-        api_key = str(uuid.uuid4())
-        api_keys.insert(ApiKey(api_key=api_key))
-        response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key})
+        response = requests.post(f"{os.getenv('API_URL')}/api-key")
         if not response.ok:
             g.response = "Failed with status code: " + str(response.status_code)
         else:
-            g.response = response.json()
+            api_key = response.json()
+            response = requests.post(
+                os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key}
+            )
+            if not response.ok:
+                g.response = "Failed with status code: " + str(response.status_code)
+            else:
+                g.response = response.json()
         # TODO: uncomment for debugging
         # g.response = "temp"
         gens.update(g)

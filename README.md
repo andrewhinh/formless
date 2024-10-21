@@ -29,7 +29,6 @@ Set up the environment:
 
 ```bash
 uv sync --all-extras --dev
-uvx pre-commit install
 modal setup
 ```
 
@@ -100,6 +99,7 @@ Deploy on dev:
 
 ```bash
 modal deploy --env=dev frontend/app.py
+# update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
 
 Deploy on main:
@@ -114,6 +114,7 @@ Run the package:
 
 ```bash
 uv run formless -v
+# update API_URL in src/formless/__init__.py
 ```
 
 Build the package:

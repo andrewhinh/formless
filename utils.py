@@ -6,7 +6,6 @@ import modal
 
 NAME = "formless"
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
-DEFAULT_API_KEY = "ff3ecd93-9a4e-4df6-bc86-4769aef639b1"
 
 # Modal
 CUDA_VERSION = "12.4.0"
