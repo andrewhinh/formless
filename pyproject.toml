@@ -1,11 +1,12 @@
 [project]
 name = "formless"
-version = "0.3.0"
+version = "0.4.0"
 description = "Handwritten + image OCR."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "modal>=0.64.178",
+    "pre-commit>=4.0.1",
     "python-dotenv>=1.0.1",
     "requests>=2.32.3",
     "term-image>=0.7.2",

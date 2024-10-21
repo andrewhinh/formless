@@ -5,13 +5,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import modal
-from fastapi import HTTPException, Security
+from fastapi import FastAPI, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from PIL import ImageFile
 
 from utils import (
     DATA_VOLUME,
-    DEFAULT_API_KEY,
     DEFAULT_IMG_URL,
     GPU_IMAGE,
     MINUTES,
@@ -22,9 +21,9 @@ from utils import (
 
 parent_path: Path = Path(__file__).parent
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 # -----------------------------------------------------------------------------
 
-only_download = False  # turn off gpu for initial download
 model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 gpu_memory_utilization = 0.90
 max_model_len = 8192
@@ -48,9 +47,26 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 # -----------------------------------------------------------------------------
 
 
+# container build-time fns
+def download_model():
+    from huggingface_hub import login, snapshot_download
+
+    login(token=os.getenv("HF_TOKEN"), new_session=False)
+    snapshot_download(
+        config["model"],
+        ignore_patterns=["*.pt", "*.bin"],
+    )
+
+
 # Modal
+in_prod: bool = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
+SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if in_prod else ".env.dev")]
 IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
     "vllm==0.6.2", "term-image==0.7.2", "python-fasthtml==0.6.10", "sqlite-utils==3.18"
+).run_function(
+    download_model,
+    secrets=SECRETS,
+    volumes=VOLUME_CONFIG,
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
@@ -66,72 +82,61 @@ if GPU_TYPE.lower() == "a100":
 APP_NAME = f"{NAME}-api"
 app = modal.App(name=APP_NAME)
 
-in_prod = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
-
 # -----------------------------------------------------------------------------
 
 
-# Model
-@app.cls(
+# Main API
+@app.function(
     image=IMAGE,
-    gpu=None if only_download else GPU_CONFIG,
+    gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
-    secrets=[modal.Secret.from_dotenv(path=parent_path, filename=".env" if in_prod else ".env.dev")],
+    secrets=SECRETS,
     timeout=API_TIMEOUT,
     container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
     allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
 )
-class Model:
-    @modal.enter()  # what should a container do after it starts but before it gets input?
-    async def download_model(self):
-        from huggingface_hub import login, snapshot_download
-        from vllm import LLM
+@modal.asgi_app()
+def modal_get():
+    import requests
+    from fasthtml import common as fh
+    from PIL import Image
+    from term_image.image import from_file
+    from vllm import LLM, SamplingParams
 
-        login(token=os.getenv("HF_TOKEN"), new_session=False)
-        snapshot_download(
-            config["model"],
-            ignore_patterns=["*.pt", "*.bin"],
-        )
+    f_app = FastAPI()
 
-        if config["only_download"]:
-            return
+    db_path = f"/{DATA_VOLUME}/main.db"
+    tables = fh.database(db_path).t
+    api_keys = tables.api_keys
+    if api_keys not in tables:
+        api_keys.create(api_key=str, pk="api_key")
+    ApiKey = api_keys.dataclass()
 
-        self.llm = LLM(
-            model=config["model"],
-            gpu_memory_utilization=config["gpu_memory_utilization"],
-            max_model_len=config["max_model_len"],
-            max_num_seqs=config["max_num_seqs"],
-            enforce_eager=config["enforce_eager"],
-            tensor_parallel_size=GPU_COUNT,
-        )
+    llm = LLM(
+        model=config["model"],
+        gpu_memory_utilization=config["gpu_memory_utilization"],
+        max_model_len=config["max_model_len"],
+        max_num_seqs=config["max_num_seqs"],
+        enforce_eager=config["enforce_eager"],
+        tensor_parallel_size=GPU_COUNT,
+    )
 
     async def verify_api_key(
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
-        from fasthtml import common as fh
-
-        db_path = f"/{DATA_VOLUME}/main.db"
-        tables = fh.database(db_path).t
-        api_keys = tables.api_keys
         if api_key_header in api_keys:
             return True
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
-    @modal.web_endpoint(method="POST")
-    async def infer(self, request: dict, api_key: bool = Security(verify_api_key)) -> str:
-        if config["only_download"]:
-            return ""
-
-        import requests
-        from PIL import Image
-        from term_image.image import from_file
-        from vllm import SamplingParams
+    @f_app.post("/")
+    async def main(request: Request, api_key: bool = Security(verify_api_key)) -> str:
+        body = await request.json()
 
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        image_url = request.get("image_url")
+        image_url = body.get("image_url")
         response = requests.get(image_url, stream=True)
         response.raise_for_status()
         image = Image.open(response.raw).convert("RGB")
@@ -149,7 +154,7 @@ class Model:
             "multi_modal_data": {"image": image},
         }
 
-        outputs = self.llm.generate(inputs, sampling_params=sampling_params)
+        outputs = llm.generate(inputs, sampling_params=sampling_params)
         generated_text = outputs[0].outputs[0].text.strip()
 
         # show the question, image, and response in the terminal for demonstration purposes
@@ -171,6 +176,14 @@ class Model:
 
         return generated_text
 
+    @f_app.post("/api-key")
+    async def apikey() -> str:
+        api_key = str(uuid4())
+        api_keys.insert(ApiKey(api_key=api_key))
+        return api_key
+
+    return f_app
+
 
 ## For testing
 @app.local_entrypoint()
@@ -179,16 +192,14 @@ def main(
 ):
     import requests
 
-    model = Model()
+    response = requests.post(f"{modal_get.web_url}/api-key")
+    assert response.ok, response.status_code
+    api_key = response.json()
 
-    response = requests.post(
-        model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": DEFAULT_API_KEY}
-    )
+    response = requests.post(modal_get.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": api_key})
     assert response.ok, response.status_code
 
     if twice:
         # second response is faster, because the Function is already running
-        response = requests.post(
-            model.infer.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": DEFAULT_API_KEY}
-        )
+        response = requests.post(modal_get.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": api_key})
         assert response.ok, response.status_code
