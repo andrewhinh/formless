@@ -42,6 +42,7 @@ app = modal.App(APP_NAME)
 )
 @modal.asgi_app()
 def modal_get():  # noqa: C901
+    import time
     import uuid
 
     import requests
@@ -49,7 +50,8 @@ def modal_get():  # noqa: C901
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
-    # FastHTML setup
+    # Setup
+    ## FastHTML
     f_app, _ = fh.fast_app(
         ws_hdr=True,
         hdrs=[
@@ -62,7 +64,7 @@ def modal_get():  # noqa: C901
     )
     fh.setup_toasts(f_app)
 
-    # database
+    ## database
     db_path = f"/{DATA_VOLUME}/main.db"
     # TODO: uncomment for debugging
     # os.remove(db_path)
@@ -72,7 +74,7 @@ def modal_get():  # noqa: C901
         gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
 
-    ## write global balance to db
+    ## global balance
     init_balance = 100
     global_balance = tables.global_balance
     if global_balance not in tables:
@@ -86,12 +88,30 @@ def modal_get():  # noqa: C901
             global_balance.insert(Balance(balance=init_balance))
             return global_balance.get(1)
 
-    # Stripe
+    ## stripe
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
     webhook_secret = os.environ["STRIPE_WEBHOOK_SECRET"]
     DOMAIN: str = os.environ["DOMAIN"]
 
-    # preview while waiting for response
+    # Components
+    def icon(
+        svg,
+        width="35",
+        height="35",
+        viewBox="0 0 15 15",
+        fill="none",
+        cls="rounded p-0.5 hover:bg-zinc-700 cursor-pointer",
+    ):
+        return fh.Svg(
+            fh.NotStr(svg),
+            width=width,
+            height=height,
+            viewBox=viewBox,
+            fill=fill,
+            cls=cls,
+        )
+
+    ## preview while waiting for response
     def generation_preview(g, session):
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -127,25 +147,28 @@ def modal_get():  # noqa: C901
             hx_swap="outerHTML",
         )
 
-    # components
-    def icon(
-        svg,
-        width="35",
-        height="35",
-        viewBox="0 0 15 15",
-        fill="none",
-        cls="rounded p-0.5 hover:bg-zinc-700 cursor-pointer",
-    ):
-        return fh.Svg(
-            fh.NotStr(svg),
-            width=width,
-            height=height,
-            viewBox=viewBox,
-            fill=fill,
-            cls=cls,
+    ## api key request preview
+    def key_request_preview(key, session):
+        if "session_id" not in session:
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
+
+        if key["key"] and key["granted_at"]:
+            return fh.Tr(
+                fh.Td(key["key"]),
+                fh.Td(key["granted_at"]),
+                id=f"key-{key['key']}",
+            )
+        return fh.Tr(
+            fh.Td("Requesting new key ..."),
+            fh.Td(""),
+            id=f"key-{key['key']}",
+            hx_get=f"/keys/{key['key']}",
+            hx_trigger="every 2s",
+            hx_swap="outerHTML",
         )
 
-    # layout
+    # Layout
     def nav():
         return fh.Nav(
             fh.A(
@@ -154,6 +177,11 @@ def modal_get():  # noqa: C901
                 cls="text-xl text-blue-300 hover:text-blue-100 font-mono font-family:Consolas, Monaco, 'Lucida Console', 'Liberation Mono', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', 'Courier New'",
             ),
             fh.Div(
+                fh.A(
+                    "Developer",
+                    href="/developer",
+                    cls="text-lg text-blue-300 hover:text-blue-100 font-mono font-family:Consolas, Monaco, 'Lucida Console', 'Liberation Mono', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', 'Courier New'",
+                ),
                 fh.A(
                     icon(si_github.svg),
                     href="https://github.com/andrewhinh/formless",
@@ -164,7 +192,7 @@ def modal_get():  # noqa: C901
                     href="https://pypi.org/project/formless/",
                     target="_blank",
                 ),
-                cls="flex gap-4",
+                cls="flex flex-col items-end md:flex-row md:items-center gap-4 md:gap-8",
             ),
             cls="flex justify-between p-4",
         )
@@ -194,8 +222,8 @@ def modal_get():  # noqa: C901
             ),
             fh.Button(
                 "Clear all",
-                id="clear-all",
-                hx_post="/clear",
+                id="clear-gens",
+                hx_post="/clear-gens",
                 target_id="gen-list",
                 hx_swap="innerHTML",
                 cls=f"text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 {'hidden' if not gen_containers else ''}",
@@ -221,6 +249,40 @@ def modal_get():  # noqa: C901
             cls="flex flex-col justify-center items-center gap-4",
         )
 
+    def developer_page(session):
+        key_containers = [key_request_preview(key, session) for key in session.get("granted_keys", [])]
+        return fh.Main(
+            fh.Group(
+                fh.Button(
+                    "Request New Key",
+                    id="request-new-key",
+                    hx_post="/request-key",
+                    target_id="api-key-table",
+                    hx_swap="afterbegin",
+                    cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-1/3 border-blue-300 border-2 hover:border-blue-100",
+                ),
+                fh.Button(
+                    "Clear all",
+                    id="clear-keys",
+                    hx_post="/clear-keys",
+                    target_id="api-key-table",
+                    hx_swap="innerHTML",
+                    cls=f"text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 {'hidden' if not key_containers else ''}",
+                ),
+                cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
+            ),
+            fh.Table(
+                fh.Tr(
+                    fh.Th("Key"),
+                    fh.Th("Granted At"),
+                    cls="font-bold",
+                ),
+                fh.Tbody(*key_containers[::-1], id="api-key-table"),
+                cls="text-sm md:text-lg w-2/3 border-slate-500 border-2",
+            ),
+            cls="flex flex-col justify-center items-center gap-4",
+        )
+
     def toast_container():
         return fh.Div(id="toast-container", cls="hidden")
 
@@ -236,10 +298,31 @@ def modal_get():  # noqa: C901
                 ),
                 cls="flex flex-col text-right gap-0.5",
             ),
-            cls="flex justify-between p-4 text-lg",
+            cls="flex justify-between p-4 text-sm md:text-lg",
         )
 
-    # routes
+    # Helper fns
+
+    ## generate the response (in a separate thread)
+    @fh.threaded
+    def generate_and_save(g) -> None:
+        response = requests.post(f"{os.getenv('API_URL')}/api-key")
+        if not response.ok:
+            g.response = "Failed with status code: " + str(response.status_code)
+        else:
+            api_key = response.json()
+            response = requests.post(
+                os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key}
+            )
+            if not response.ok:
+                g.response = "Failed with status code: " + str(response.status_code)
+            else:
+                g.response = response.json()
+        # TODO: uncomment for debugging
+        # g.response = "temp"
+        gens.update(g)
+
+    # Routes
     @f_app.get("/")
     async def home(session):
         if "session_id" not in session:
@@ -252,10 +335,62 @@ def modal_get():  # noqa: C901
             cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
         )
 
+    ## developer page
+    @f_app.get("/developer")
+    def developer(session):
+        return fh.Title(NAME + " | " + "developer"), fh.Div(
+            nav(),
+            developer_page(session),
+            toast_container(),
+            footer(),
+            cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+        )
+
+    ## api key request
+    @f_app.post("/request-key")
+    def generate_key(session):
+        # Check for session ID
+        if "session_id" not in session:
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
+
+        # Clear button
+        clear_button = (
+            fh.Button(
+                "Clear all",
+                id="clear-keys",
+                hx_post="/clear-keys",
+                target_id="api-key-table",
+                hx_swap="innerHTML",
+                hx_swap_oob="true",
+                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
+            ),
+        )
+
+        # Request a new key
+        response = requests.post(f"{os.getenv('API_URL')}/api-key")
+        if not response.ok:
+            fh.add_toast(session, "Failed to request key", "error")
+            return None
+        else:
+            api_key = response.json()
+            curr_time = time.time()
+            curr_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(curr_time))
+            key = {"key": api_key, "granted_at": curr_time}
+            session.setdefault("granted_keys", []).append(key)
+            return key_request_preview(key, session), clear_button
+
     ## pending preview keeps polling this route until we return the image preview
     @f_app.get("/gens/{id}")
     def preview(id: int, session):
         return generation_preview(gens.get(id), session)
+
+    ## likewise we poll to keep the key request updated
+    @f_app.get("/keys/{key}")
+    def key_request(key: str, session):
+        for key in session.get("granted_keys", []):
+            if key["key"] == key:
+                return key_request_preview(key, session)
 
     ## Likewise we poll to keep the balance updated
     @f_app.get("/balance")
@@ -265,7 +400,7 @@ def modal_get():  # noqa: C901
             fh.Div(
                 fh.P("Global balance:"),
                 fh.P(f"{curr_balance.balance} credits", cls="font-bold"),
-                cls="flex gap-1",
+                cls="flex items-start gap-0.5 md:gap-1",
             ),
             fh.P(
                 fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
@@ -293,7 +428,7 @@ def modal_get():  # noqa: C901
 
     ## generation route
     @f_app.post("/")
-    def generate(session, image_url: str = None):
+    def generate_text(session, image_url: str = None):
         # Check for session ID
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -324,8 +459,8 @@ def modal_get():  # noqa: C901
         clear_c_button = (
             fh.Button(
                 "Clear all",
-                id="clear-all",
-                hx_post="/clear",
+                id="clear-gens",
+                hx_post="/clear-gens",
                 target_id="gen-list",
                 hx_swap="innerHTML",
                 hx_swap_oob="true",
@@ -347,27 +482,8 @@ def modal_get():  # noqa: C901
 
         return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
 
-    ## generate the response (in a separate thread)
-    @fh.threaded
-    def generate_and_save(g) -> None:
-        response = requests.post(f"{os.getenv('API_URL')}/api-key")
-        if not response.ok:
-            g.response = "Failed with status code: " + str(response.status_code)
-        else:
-            api_key = response.json()
-            response = requests.post(
-                os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key}
-            )
-            if not response.ok:
-                g.response = "Failed with status code: " + str(response.status_code)
-            else:
-                g.response = response.json()
-        # TODO: uncomment for debugging
-        # g.response = "temp"
-        gens.update(g)
-
-    ## clear all
-    @f_app.post("/clear")
+    ## clear gens
+    @f_app.post("/clear-gens")
     def clear_all(session):
         ids = [g.id for g in gens(where=f"session_id == '{session['session_id']}'")]
         for id in ids:
@@ -375,9 +491,26 @@ def modal_get():  # noqa: C901
         clear_button = (
             fh.Button(
                 "Clear all",
-                id="clear-all",
-                hx_post="/clear",
+                id="clear-gens",
+                hx_post="/clear-gens",
                 target_id="gen-list",
+                hx_swap="innerHTML",
+                hx_swap_oob="true",
+                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
+            ),
+        )
+        return None, clear_button
+
+    ## clear keys
+    @f_app.post("/clear-keys")
+    def clear_keys(session):
+        session["granted_keys"] = []
+        clear_button = (
+            fh.Button(
+                "Clear all",
+                id="clear-keys",
+                hx_post="/clear-keys",
+                target_id="api-key-table",
                 hx_swap="innerHTML",
                 hx_swap_oob="true",
                 cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
@@ -468,8 +601,8 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add export to csv
-# - replace polling routes with websockets
-# - add user authentication
 # - add api key management
+# - replace polling routes with SSE
+# - add export to csv
+# - add user authentication
 # - add error reporting
