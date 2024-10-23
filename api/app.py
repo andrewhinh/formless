@@ -203,3 +203,8 @@ def main(
         # second response is faster, because the Function is already running
         response = requests.post(modal_get.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": api_key})
         assert response.ok, response.status_code
+
+
+# TODO:
+# - Replace with custom model impl FT on hard images
+# - Add custom CUDA kernels for faster inference

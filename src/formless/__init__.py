@@ -89,7 +89,3 @@ def main(
             print(f"[red]Failed with error: {e}[/red]")
             print(traceback.format_exc())
             print("[red]\n\nExiting...[/red]")
-
-
-# TODO:
-# - Add more CLI options

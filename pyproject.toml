@@ -5,15 +5,23 @@ description = "Handwritten + image OCR."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ipykernel>=6.29.5",
     "modal>=0.64.178",
     "pre-commit>=4.0.1",
     "python-dotenv>=1.0.1",
     "requests>=2.32.3",
     "term-image>=0.7.2",
+    "torch>=2.5.0",
 ]
 
 [project.scripts]
 formless = "formless:app"
+
+[project.optional-dependencies]
+training = [
+    "matplotlib>=3.9.2",
+    "transformers>=4.45.2",
+]
 
 
 [build-system]
