@@ -11,7 +11,6 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "requests>=2.32.3",
     "term-image>=0.7.2",
-    "torch>=2.5.0",
 ]
 
 [project.scripts]
@@ -20,6 +19,10 @@ formless = "formless:app"
 [project.optional-dependencies]
 training = [
     "matplotlib>=3.9.2",
+    "torch>=2.5.0",
+    "torchao>=0.6.1",
+    "torchtune>=0.3.1",
+    "torchvision>=0.20.0",
     "transformers>=4.45.2",
 ]
 
