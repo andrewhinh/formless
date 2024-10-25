@@ -466,6 +466,7 @@ dependencies = [
 
 [package.optional-dependencies]
 training = [
+    { name = "datasets" },
     { name = "matplotlib" },
     { name = "torch" },
     { name = "torchao" },
@@ -476,6 +477,7 @@ training = [
 
 [package.metadata]
 requires-dist = [
+    { name = "datasets", marker = "extra == 'training'", specifier = ">=2.14.4" },
     { name = "ipykernel", specifier = ">=6.29.5" },
     { name = "matplotlib", marker = "extra == 'training'", specifier = ">=3.9.2" },
     { name = "modal", specifier = ">=0.64.178" },
