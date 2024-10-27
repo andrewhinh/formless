@@ -5,6 +5,7 @@ import logging
 import math
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import lru_cache, partial
 from importlib import import_module
 from types import ModuleType
@@ -5666,6 +5667,7 @@ def llama3_2_vision_decoder(
     layers = []
 
     rope = Llama3ScaledRoPE(dim=head_dim, max_seq_len=max_seq_len, base=rope_base)
+
     for idx in range(1, num_layers + 1):
         # Self attention layers for text decoder
         self_attn = MultiHeadAttention(
@@ -5736,59 +5738,6 @@ def llama3_2_vision_decoder(
     )
 
 
-def llama3_2_vision_11b(
-    decoder_trainable: bool = False,
-    encoder_trainable: bool = True,
-    fusion_trainable: bool = True,
-    image_size: int = 560,
-) -> DeepFusionModel:
-    """Llama 3.2 Vision 11B model
-
-    Args:
-        decoder_trainable (bool): Whether to make decoder params trainable. Default is False.
-        encoder_trainable (bool): Whether to make encoder params trainable. Default is True.
-        fusion_trainable (bool): Whether to make fusion params trainable. Default is True.
-        image_size (int): Base image size that images will be tiled and resized to.
-            Default is 560 for Instruct weights, use 448 for pre-trained.
-
-    Returns
-    -------
-        DeepFusionModel: Instantiation of the Llama 3.2 Vision 11B model
-    """
-    encoder = llama3_2_vision_encoder(
-        patch_size=14,
-        num_heads=16,
-        clip_embed_dim=1280,
-        clip_num_layers=32,
-        clip_hidden_states=[3, 7, 15, 23, 30],
-        decoder_embed_dim=4096,
-        num_layers_projection=8,
-        tile_size=image_size,
-        max_num_tiles=4,
-        in_channels=3,
-    )
-    decoder = llama3_2_vision_decoder(
-        vocab_size=128_256,
-        num_layers=32,
-        fusion_interval=4,
-        num_special_tokens=8,
-        num_heads=32,
-        num_kv_heads=8,
-        embed_dim=4096,
-        max_seq_len=131_072,
-        encoder_max_seq_len=128_080,  # 20*6404
-        rope_base=500000.0,
-        intermediate_dim=14336,
-    )
-    return DeepFusionModel(
-        encoder=encoder,
-        decoder=decoder,
-        encoder_trainable=encoder_trainable,
-        decoder_trainable=decoder_trainable,
-        fusion_trainable=fusion_trainable,
-    )
-
-
 def llama3_2_vision_transform(
     path: str,
     max_seq_len: int = 8192,
@@ -5832,201 +5781,397 @@ def llama3_2_vision_transform(
     )
 
 
-# if __name__ == "__main__":
-# model = llama3_2_vision_11b().to("cuda")
-# print(model)
-# transform: Llama3VisionTransform = llama3_2_vision_transform("/tmp/Llama-3.2-11B-Vision-Instruct/tokenizer.json")
-# print(transform)
-# images = torch.rand(1, 3, 560, 560).to("cuda")
-# print(images.shape)
-# prompt = "Translate the following text into French: 'Hello, how are you?'"
-# print(prompt)
-# tokens = transform.encode(prompt).to("cuda")
-# mask = torch.ones_like(tokens).bool().to("cuda")
-# print(tokens.shape, mask.shape)
-# output = model(tokens, mask, images)
-# print(output)
-
-
 # -----------------------------------------------------------------------------
 
 # # temp for format
 
 
-# @dataclass
-# class Llama_32_11B_VisionConfig:
-#     img_size: int = 1280  # image size
-#     vis_n_embd: int = 1280  # vision embedding dimension
-#     vis_transformer_n_layers: int = 32  # number of layers in the vision transformer
-#     vis_global_transformer_n_layers: int = 8  # number of layers in the global transformer
+@dataclass
+class Llama_32_11B_VisionConfig:
+    decoder_trainable: bool = False
+    encoder_trainable: bool = True
+    fusion_trainable: bool = True
+    image_size: int = 560
 
-#     block_size: int = 1024  # max sequence length
-#     n_head: int = 12  # number of heads
+    patch_size = 14
+    num_heads = 16
+    clip_embed_dim = 1280
+    clip_num_layers = 32
+    clip_hidden_states = [3, 7, 15, 23, 30]
+    decoder_embed_dim = 4096
+    num_layers_projection = 8
+    tile_size = image_size
+    max_num_tiles = 4
+    in_channels = 3
 
-#     vocab_size: int = 128264  # number of tokens: 128,007 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
-#     llm_n_embd: int = 4096  # llm embedding dimension
-#     llm_n_layers: int = 40  # number of layers in the llm
+    vocab_size = 128256  # number of tokens: 127,999 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
+    num_layers = 16  # TODO: 32
+    fusion_interval = 4
+    num_special_tokens = 8
+    num_heads = 32
+    num_kv_heads = 8
+    max_seq_len = 131072
+    encoder_max_seq_len = 128080  # 20*6404
+    rope_base = 500000.0
+    intermediate_dim = 14336
 
 
-# class Llama_32_11B_Vision(nn.Module):
-#     def __init__(self, config):
-#         super().__init__()
-#         self.config = config
+class Llama_32_11B_Vision(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
 
-#         self.vision_model = nn.ModuleDict(
-#             {
-#                 "class_embedding": nn.Embedding(config.img_size, 1),
-#                 "patch_embedding": nn.Embedding(config.img_size, 3 * 14 * 14),
-#                 "gated_positional_embedding": nn.ModuleDict(
-#                     {
-#                         "gate": nn.Linear(1, 1, bias=False),
-#                         "embedding": nn.Embedding(1601, config.vis_n_embd),
-#                         "tile_embedding": nn.Embedding(9, 8197120),
-#                     }
-#                 ),
-#                 "pre_tile_positional_embedding": nn.ModuleDict(
-#                     {
-#                         "gate": nn.Linear(1, 1, bias=False),
-#                         "embedding": nn.Embedding(9, 4 * config.vis_n_embd),
-#                     }
-#                 ),
-#                 "post_tile_positional_embedding": nn.ModuleDict(
-#                     {
-#                         "gate": nn.Linear(1, 1, bias=False),
-#                         "embedding": nn.Embedding(9, 4 * config.vis_n_embd),
-#                     }
-#                 ),
-#                 "layernorm_pre": nn.LayerNorm(config.vis_n_embd),
-#                 "layernorm_post": nn.LayerNorm(config.vis_n_embd),
-#                 "transformer": nn.ModuleList([VisionBlock(config) for _ in range(config.vis_transformer_n_layers)]),
-#                 "global_transformer": nn.ModuleDict(
-#                     {
-#                         "layers": nn.ModuleList(
-#                             [
-#                                 nn.ModuleDict(
-#                                     {
-#                                         "gate_attn": nn.Linear(1, 1, bias=False),
-#                                         "gate_ffn": nn.Linear(1, 1, bias=False),
-#                                         "self_attn": nn.ModuleDict(
-#                                             {
-#                                                 "q_proj": nn.Linear(config.vis_n_embd, config.vis_n_embd),
-#                                                 "k_proj": nn.Linear(config.vis_n_embd, config.vis_n_embd),
-#                                                 "v_proj": nn.Linear(config.vis_n_embd, config.vis_n_embd),
-#                                                 "o_proj": nn.Linear(config.vis_n_embd, config.vis_n_embd),
-#                                             }
-#                                         ),
-#                                         "mlp": nn.ModuleDict(
-#                                             {
-#                                                 "fc1": nn.Linear(4 * config.vis_n_embd, config.vis_n_embd),
-#                                                 "fc2": nn.Linear(config.vis_n_embd, 4 * config.vis_n_embd),
-#                                             }
-#                                         ),
-#                                         "input_layernorm": nn.LayerNorm(config.vis_n_embd),
-#                                         "post_attention_layernorm": nn.LayerNorm(config.vis_n_embd),
-#                                     }
-#                                 )
-#                                 for _ in range(config.vis_global_transformer_n_layers)
-#                             ]
-#                         )
-#                     }
-#                 ),
-#             }
-#         )
+        self.encoder = llama3_2_vision_encoder(
+            patch_size=self.config.patch_size,
+            num_heads=self.config.num_heads,
+            clip_embed_dim=self.config.clip_embed_dim,
+            clip_num_layers=self.config.clip_num_layers,
+            clip_hidden_states=self.config.clip_hidden_states,
+            decoder_embed_dim=self.config.decoder_embed_dim,
+            num_layers_projection=self.config.num_layers_projection,
+            tile_size=self.config.image_size,
+            max_num_tiles=self.config.max_num_tiles,
+            in_channels=self.config.in_channels,
+        )
+        self.decoder = llama3_2_vision_decoder(
+            vocab_size=self.config.vocab_size,
+            num_layers=self.config.num_layers,
+            fusion_interval=self.config.fusion_interval,
+            num_special_tokens=self.config.num_special_tokens,
+            num_heads=self.config.num_heads,
+            num_kv_heads=self.config.num_kv_heads,
+            embed_dim=self.config.decoder_embed_dim,
+            max_seq_len=self.config.max_seq_len,
+            encoder_max_seq_len=self.config.encoder_max_seq_len,
+            rope_base=self.config.rope_base,
+            intermediate_dim=self.config.intermediate_dim,
+        )
+        self.model = DeepFusionModel(
+            encoder=self.encoder,
+            decoder=self.decoder,
+            encoder_trainable=self.config.encoder_trainable,
+            decoder_trainable=self.config.decoder_trainable,
+            fusion_trainable=self.config.fusion_trainable,
+        )
 
-#         self.language_model = nn.ModuleDict(
-#             {
-#                 "embed_tokens": nn.Embedding(config.vocab_size, config.llm_n_embd),
-#                 "layers": nn.ModuleList([LLMBlock(config) for _ in range(config.n_layer)]),
-#                 "norm": nn.LayerNorm(config.llm_n_embd),
-#                 "lm_head": nn.Linear(config.vocab_size, config.llm_n_embd, bias=False),
-#             }
-#         )
+        # init params
+        self.apply(self._init_weights)
 
-#         self.multi_modal_projector = nn.Linear(7680, config.llm_n_embd)
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            std = 0.02
+            if hasattr(module, "NANOGPT_SCALE_INIT"):
+                std *= (2 * self.config.n_layer) ** -0.5
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-#         # init params
-#         self.apply(self._init_weights)
+    def forward(self, idx, targets=None):
+        # idx is of shape (B, T)
+        B, T = idx.size()
+        assert (
+            T <= self.config.block_size
+        ), f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # forward the token and posisition embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)  # shape (T)
+        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (T, n_embd)
+        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (B, T, n_embd)
+        x = tok_emb + pos_emb
+        # forward the blocks of the transformer
+        for block in self.transformer.h:
+            x = block(x)
+        # forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)  # (B, T, vocab_size)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
-#     def _init_weights(self, module):
-#         if isinstance(module, nn.Linear):
-#             std = 0.02
-#             if hasattr(module, "NANOGPT_SCALE_INIT"):
-#                 std *= (2 * self.config.n_layer) ** -0.5
-#             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-#             if module.bias is not None:
-#                 torch.nn.init.zeros_(module.bias)
-#         elif isinstance(module, nn.Embedding):
-#             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    @classmethod
+    def from_pretrained(  # noqa: C901
+        cls,
+    ):
+        """
+        Loads pretrained Llama-3.2-11B-Vision model weights from huggingface.
+        - Updating the cross attention layer numbers
+        - skip loading the rope embeddings
+        - reshaping q, k projections
+        - reversing the precomputed vision positional embeddings
+        """
+        from transformers import MllamaForConditionalGeneration
 
-#     def forward(self, idx, targets=None):
-#         # idx is of shape (B, T)
-#         B, T = idx.size()
-#         assert (
-#             T <= self.config.block_size
-#         ), f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
-#         # forward the token and posisition embeddings
-#         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)  # shape (T)
-#         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (T, n_embd)
-#         tok_emb = self.transformer.wte(idx)  # token embeddings of shape (B, T, n_embd)
-#         x = tok_emb + pos_emb
-#         # forward the blocks of the transformer
-#         for block in self.transformer.h:
-#             x = block(x)
-#         # forward the final layernorm and the classifier
-#         x = self.transformer.ln_f(x)
-#         logits = self.lm_head(x)  # (B, T, vocab_size)
-#         loss = None
-#         if targets is not None:
-#             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-#         return logits, loss
+        model_id = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 
-#     @classmethod
-#     def from_pretrained(cls):
-#         """Loads pretrained Llama-3.2-11B-Vision model weights from huggingface"""
-#         from transformers import MllamaForConditionalGeneration
+        print(f"loading weights from pretrained model: {model_id}")
 
-#         model_id = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+        # # create a from-scratch initialized model
+        config = Llama_32_11B_VisionConfig()
+        model = Llama_32_11B_Vision(config)
+        sd = model.state_dict()
 
-#         print(f"loading weights from pretrained model: {model_id}")
+        # init a huggingface/transformers model
+        model_hf = MllamaForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,
+        )
+        sd_hf = model_hf.state_dict()
 
-#         # create a from-scratch initialized model
-#         config = Llama_32_11B_VisionConfig()
-#         model = Llama_32_11B_Vision(config)
-#         sd = model.state_dict()
-#         sd_keys = sd.keys()
+        converted_state_dict = {}
+        head_dim = config.decoder_embed_dim // config.num_heads
+        cross_attention_layers = []
 
-#         # init a huggingface/transformers model
-#         model_hf = MllamaForConditionalGeneration.from_pretrained(
-#             model_id,
-#             torch_dtype=torch.bfloat16,
-#         )
-#         sd_hf = model_hf.state_dict()
+        def _permute(t, n_heads):
+            return (
+                t.view(n_heads, 2, head_dim // 2, config.decoder_embed_dim)
+                .transpose(1, 2)
+                .reshape((head_dim * n_heads), config.decoder_embed_dim)
+            )
 
-#         # copy while ensuring all of the parameters are aligned and match in names and shapes
-#         sd_keys_hf = sd_hf.keys()
-#         assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
-#         for k in sd_keys_hf:
-#             # vanilla copy over the other parameters
-#             assert sd_hf[k].shape == sd[k].shape
-#             with torch.no_grad():
-#                 sd[k].copy_(sd_hf[k])
+        _FROM_HF = {
+            "language_model.model.embed_tokens.weight": "decoder.tok_embeddings.weight",
+            "language_model.model.layers.{}.self_attn.q_proj.weight": "decoder.layers.{}.attn.q_proj.weight",
+            "language_model.model.layers.{}.self_attn.k_proj.weight": "decoder.layers.{}.attn.k_proj.weight",
+            "language_model.model.layers.{}.self_attn.v_proj.weight": "decoder.layers.{}.attn.v_proj.weight",
+            "language_model.model.layers.{}.self_attn.o_proj.weight": "decoder.layers.{}.attn.output_proj.weight",
+            "language_model.model.layers.{}.self_attn.rotary_emb.inv_freq": None,
+            "language_model.model.layers.{}.mlp.gate_proj.weight": "decoder.layers.{}.mlp.w1.weight",
+            "language_model.model.layers.{}.mlp.up_proj.weight": "decoder.layers.{}.mlp.w3.weight",
+            "language_model.model.layers.{}.mlp.down_proj.weight": "decoder.layers.{}.mlp.w2.weight",
+            "language_model.model.layers.{}.input_layernorm.weight": "decoder.layers.{}.sa_norm.scale",
+            "language_model.model.layers.{}.post_attention_layernorm.weight": "decoder.layers.{}.mlp_norm.scale",
+            "language_model.model.norm.weight": "decoder.norm.scale",
+            "language_model.lm_head.weight": "decoder.output.weight",
+            "language_model.model.layers.{}.cross_attn_attn_gate": "decoder.layers.{}.fusion_layer.ca_scale.scale",
+            "language_model.model.layers.{}.cross_attn_mlp_gate": "decoder.layers.{}.fusion_layer.mlp_scale.scale",
+            "language_model.model.layers.{}.cross_attn.q_proj.weight": "decoder.layers.{}.fusion_layer.attn.q_proj.weight",
+            "language_model.model.layers.{}.cross_attn.k_proj.weight": "decoder.layers.{}.fusion_layer.attn.k_proj.weight",
+            "language_model.model.layers.{}.cross_attn.v_proj.weight": "decoder.layers.{}.fusion_layer.attn.v_proj.weight",
+            "language_model.model.layers.{}.cross_attn.o_proj.weight": "decoder.layers.{}.fusion_layer.attn.output_proj.weight",
+            "language_model.model.layers.{}.cross_attn.q_norm.weight": "decoder.layers.{}.fusion_layer.attn.q_norm.scale",
+            "language_model.model.layers.{}.cross_attn.k_norm.weight": "decoder.layers.{}.fusion_layer.attn.k_norm.scale",
+            "vision_model.gated_positional_embedding.embedding": "encoder.clip.token_pos_embedding.local_token_positional_embedding",
+            "vision_model.gated_positional_embedding.tile_embedding.weight": "encoder.clip.token_pos_embedding.global_token_positional_embedding",  # noqa
+            "vision_model.gated_positional_embedding.gate": "encoder.clip.token_pos_embedding.gate",
+            "vision_model.layernorm_pre.weight": "encoder.clip.ln_pre.weight",
+            "vision_model.layernorm_pre.bias": "encoder.clip.ln_pre.bias",
+            "vision_model.layernorm_post.weight": "encoder.clip.ln_post.weight",
+            "vision_model.layernorm_post.bias": "encoder.clip.ln_post.bias",
+            "vision_model.pre_tile_positional_embedding.embedding.weight": "encoder.clip.pre_tile_pos_embed.embedding",
+            "vision_model.pre_tile_positional_embedding.gate": "encoder.clip.pre_tile_pos_embed.gate",
+            "vision_model.post_tile_positional_embedding.embedding.weight": "encoder.clip.post_tile_pos_embed.embedding",
+            "vision_model.post_tile_positional_embedding.gate": "encoder.clip.post_tile_pos_embed.gate",
+            "vision_model.class_embedding": "encoder.clip.cls_token_embedding.weight",
+            "vision_model.patch_embedding.weight": "encoder.clip.conv.weight",
+            "vision_model.transformer.layers.{}.self_attn.q_proj.weight": "encoder.clip.layers.{}.attn.q_proj.weight",
+            "vision_model.transformer.layers.{}.self_attn.k_proj.weight": "encoder.clip.layers.{}.attn.k_proj.weight",
+            "vision_model.transformer.layers.{}.self_attn.v_proj.weight": "encoder.clip.layers.{}.attn.v_proj.weight",
+            "vision_model.transformer.layers.{}.self_attn.o_proj.weight": "encoder.clip.layers.{}.attn.output_proj.weight",
+            "vision_model.transformer.layers.{}.mlp.fc1.weight": "encoder.clip.layers.{}.mlp.w1.weight",
+            "vision_model.transformer.layers.{}.mlp.fc1.bias": "encoder.clip.layers.{}.mlp.w1.bias",
+            "vision_model.transformer.layers.{}.mlp.fc2.weight": "encoder.clip.layers.{}.mlp.w2.weight",
+            "vision_model.transformer.layers.{}.mlp.fc2.bias": "encoder.clip.layers.{}.mlp.w2.bias",
+            "vision_model.transformer.layers.{}.input_layernorm.weight": "encoder.clip.layers.{}.sa_norm.weight",
+            "vision_model.transformer.layers.{}.input_layernorm.bias": "encoder.clip.layers.{}.sa_norm.bias",
+            "vision_model.transformer.layers.{}.post_attention_layernorm.weight": "encoder.clip.layers.{}.mlp_norm.weight",
+            "vision_model.transformer.layers.{}.post_attention_layernorm.bias": "encoder.clip.layers.{}.mlp_norm.bias",
+            "vision_model.global_transformer.layers.{}.self_attn.q_proj.weight": "encoder.projection.layers.{}.attn.q_proj.weight",
+            "vision_model.global_transformer.layers.{}.self_attn.k_proj.weight": "encoder.projection.layers.{}.attn.k_proj.weight",
+            "vision_model.global_transformer.layers.{}.self_attn.v_proj.weight": "encoder.projection.layers.{}.attn.v_proj.weight",
+            "vision_model.global_transformer.layers.{}.self_attn.o_proj.weight": "encoder.projection.layers.{}.attn.output_proj.weight",
+            "vision_model.global_transformer.layers.{}.mlp.fc1.weight": "encoder.projection.layers.{}.mlp.w1.weight",
+            "vision_model.global_transformer.layers.{}.mlp.fc1.bias": "encoder.projection.layers.{}.mlp.w1.bias",
+            "vision_model.global_transformer.layers.{}.mlp.fc2.weight": "encoder.projection.layers.{}.mlp.w2.weight",
+            "vision_model.global_transformer.layers.{}.mlp.fc2.bias": "encoder.projection.layers.{}.mlp.w2.bias",
+            "vision_model.global_transformer.layers.{}.input_layernorm.weight": "encoder.projection.layers.{}.sa_norm.weight",
+            "vision_model.global_transformer.layers.{}.input_layernorm.bias": "encoder.projection.layers.{}.sa_norm.bias",
+            "vision_model.global_transformer.layers.{}.post_attention_layernorm.weight": "encoder.projection.layers.{}.mlp_norm.weight",
+            "vision_model.global_transformer.layers.{}.post_attention_layernorm.bias": "encoder.projection.layers.{}.mlp_norm.bias",
+            "vision_model.global_transformer.layers.{}.gate_attn": "encoder.projection.layers.{}.sa_scale.scale",
+            "vision_model.global_transformer.layers.{}.gate_ffn": "encoder.projection.layers.{}.mlp_scale.scale",
+            "multi_modal_projector.weight": "encoder.projection.output.weight",
+            "multi_modal_projector.bias": "encoder.projection.output.bias",
+        }
 
-#         return model
+        def get_mapped_key(key: str, mapping_dict: Dict[str, str]) -> str:
+            try:
+                # Checks if there is a layer # in the key
+                if any(k.isdigit() for k in key.split(".")):
+                    # Replace layer number with "{}" to create key for lookup
+                    abstract_key = re.sub(r"(\.\d+)", ".{}", key)
+                    layer_num = re.search(r"\d+", key).group(0)
+                    new_key = mapping_dict[abstract_key]
+                    new_key = new_key.format(layer_num)
+                else:
+                    new_key = mapping_dict[key]
+            except KeyError as e:
+                raise Exception(
+                    f'Error converting the state dict. Found unexpected key: "{key}". '
+                    "Please make sure you're loading a checkpoint with the right format. "
+                ) from e
 
-#     def configure_optimizers(self, weight_decay, learning_rate, device_type):
-#         # start with all of the candidate parameters (that require grad)
-#         param_dict = dict(self.named_parameters())
-#         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-#         # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-#         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-#         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-#         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-#         optim_groups = [
-#             {"params": decay_params, "weight_decay": weight_decay},
-#             {"params": nodecay_params, "weight_decay": 0.0},
-#         ]
-#         # Create AdamW optimizer and use the fused version if it is available
-#         fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
-#         use_fused = fused_available and device_type == "cuda"
-#         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
-#         return optimizer
+            return new_key
+
+        for key, value in sd_hf.items():
+            if "rotary_emb.inv_freq" in key:  # Skip loading the position embeddings
+                continue
+            new_key = get_mapped_key(key, _FROM_HF)
+            if "language_model" in key:
+                if "layers" in key:  # Update layer numbers
+                    layer = int(key.split(".")[3])
+                    num_shifts = sum(layer > la for la in cross_attention_layers)
+                    new_layer = layer - num_shifts
+                    key_lst = new_key.split(".")
+                    if layer in cross_attention_layers and "fusion_layer" not in new_key:
+                        # some keys are the same for sa and ca, so we need to edit them here
+                        key_lst[2] = f"{new_layer}.fusion_layer"
+                        if "sa_norm" in new_key:
+                            key_lst[3] = "ca_norm"
+                    else:
+                        key_lst[2] = str(new_layer)
+                    new_key = ".".join(key_lst)
+                if "q_proj" in key and "cross_attn" not in key:
+                    value = _permute(value, config.num_heads)
+                elif "k_proj" in key and "cross_attn" not in key:
+                    value = _permute(value, config.num_kv_heads)
+                elif new_key == "decoder.tok_embeddings.weight":
+                    # Split embedding between learnable embeddings and original text embedding
+                    learned_embedding = "decoder.tok_embeddings.fusion_embedding.weight"
+                    converted_state_dict[learned_embedding] = value[config.vocab_size :]
+                    value = value[: config.vocab_size]
+            elif "vision_model" in key:
+                if "tile_pos_embed.embedding" in new_key or "global_token_positional_embedding" in new_key:
+                    # WARNING: META format postional embeddings contain embeddings that
+                    # the model can never use (4 tiles -> 4 x 4 embeddings -> a 4 x 4 image would be 16 tiles).
+                    # HF removes these extra embeddings, for us to convert to the META format we set those
+                    # unused embeddings as 0 instead of the original random (untrained) values in the original
+                    # META checkpoing
+                    num_embeds = value.shape[-1] // config.clip_embed_dim // config.max_num_tiles
+                    pos_embedding = torch.zeros(
+                        config.max_num_tiles,
+                        config.max_num_tiles,
+                        num_embeds,
+                        config.clip_embed_dim,
+                        device=value.device,
+                        dtype=value.dtype,
+                    )
+                    # Loop through aspect ratios and assign precomputed embeds back to Meta Llama embeddings
+                    for i, (h, w) in enumerate([]):
+                        if h * w == config.max_num_tiles:  # h*w < num_tiles is redundant
+                            # i == 0 is used for padding in HF
+                            pos_embedding[:h, :w] = value[i + 1].reshape(h, w, num_embeds, config.clip_embed_dim)
+                    value = pos_embedding
+
+            converted_state_dict[new_key] = value
+
+        # Load the converted state dict
+        sd.update(converted_state_dict)
+        return model
+
+    # def configure_optimizers(self, weight_decay, learning_rate, device_type):
+    #     # start with all of the candidate parameters (that require grad)
+    #     param_dict = dict(self.named_parameters())
+    #     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+    #     # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+    #     # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+    #     decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+    #     nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+    #     optim_groups = [
+    #         {"params": decay_params, "weight_decay": weight_decay},
+    #         {"params": nodecay_params, "weight_decay": 0.0},
+    #     ]
+    #     # Create AdamW optimizer and use the fused version if it is available
+    #     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+    #     use_fused = fused_available and device_type == "cuda"
+    #     optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+    #     return optimizer
+
+
+# def llama3_vision_tune_to_hf(
+#     state_dict: Dict[str, torch.Tensor],
+#     num_heads: int = 32,
+#     num_kv_heads: int = 32,
+#     dim: int = 4096,
+#     head_dim: int = None,
+#     vocab_size: int = 128256,
+#     cross_attention_layers: Optional[List[int]] = None,
+#     # Vision Encoder Paramters
+#     encoder_dim: int = 1280,
+#     tile_size: int = 448,
+#     num_tiles: int = 4,
+#     supported_aspect_ratios: List[Tuple[int, int]] = None,
+# ) -> Dict[str, torch.Tensor]:
+#     """
+#     Convertor from Tune state dict to HF state dict. This handles:
+#     - Updateing the cross attention layer numbers
+#     - skip loading the rope embeddings
+#     - reshaping q, k projections
+#     """
+#     converted_state_dict = {}
+#     inverted_mapping_dict = {v: k for k, v in _FROM_HF.items()}
+#     # missing keys in _FROM_HF due to naming collisions
+#     missing_keys = {
+#         "decoder.layers.{}.fusion_layer.ca_norm.scale": "language_model.model.layers.{}.input_layernorm.weight",
+#         "decoder.layers.{}.fusion_layer.mlp_norm.scale": "language_model.model.layers.{}.post_attention_layernorm.weight",
+#         "decoder.layers.{}.fusion_layer.mlp.w1.weight": "language_model.model.layers.{}.mlp.gate_proj.weight",
+#         "decoder.layers.{}.fusion_layer.mlp.w3.weight": "language_model.model.layers.{}.mlp.up_proj.weight",
+#         "decoder.layers.{}.fusion_layer.mlp.w2.weight": "language_model.model.layers.{}.mlp.down_proj.weight",
+#         "decoder.tok_embeddings.fusion_embedding.weight": None,
+#     }
+#     inverted_mapping_dict.update(missing_keys)
+
+#     if head_dim is None:
+#         head_dim = dim // num_heads
+#     if cross_attention_layers is None:
+#         cross_attention_layers = []
+#     # convert hf layer numbers to tune numbers
+#     cross_attention_layers = [l - i for i, l in enumerate(sorted(cross_attention_layers))]
+
+#     def _permute(t, n_heads):
+#         return t.view(n_heads, head_dim // 2, 2, dim).transpose(1, 2).reshape((head_dim * n_heads), dim)
+
+#     for key, value in state_dict.items():
+#         new_key = get_mapped_key(key, inverted_mapping_dict)
+#         if "decoder" in key:
+#             if "layers" in key:  # Update layer numbers
+#                 layer = int(key.split(".")[2])
+#                 num_shifts = sum(layer > l for l in cross_attention_layers)
+#                 new_layer = layer + num_shifts
+#                 key_lst = new_key.split(".")
+#                 if layer in cross_attention_layers and "fusion_layer" not in key:
+#                     new_layer += 1  # hf treats the fusion_layer as an additional layer
+#                 key_lst[3] = str(new_layer)
+#                 new_key = ".".join(key_lst)
+#             if "q_proj" in key and "cross_attn" not in new_key:
+#                 value = _permute(value, num_heads)
+#             elif "k_proj" in key and "cross_attn" not in new_key:
+#                 value = _permute(value, num_kv_heads)
+#             elif key == "decoder.tok_embeddings.weight":
+#                 learned_embedding = state_dict["decoder.tok_embeddings.fusion_embedding.weight"]
+#                 value = torch.cat([value, learned_embedding])
+#             elif key == "decoder.tok_embeddings.fusion_embedding.weight":
+#                 continue
+#         elif "encoder" in key:
+#             if "tile_pos_embed.embedding" in key or "global_token_positional_embedding" in key:
+#                 num_embeds = value.shape[-2]
+#                 pos_embedding = torch.zeros(
+#                     len(supported_aspect_ratios) + 1,
+#                     num_tiles,
+#                     num_embeds,
+#                     encoder_dim,
+#                     device=value.device,
+#                     dtype=value.dtype,
+#                 )
+#                 # Loop through aspect ratios and precompute embeds per aspect ratio
+#                 for i, (h, w) in enumerate(supported_aspect_ratios or []):
+#                     pos_embedding[i + 1, : h * w] = value[:h, :w].reshape(h * w, num_embeds, encoder_dim)
+#                 value = pos_embedding.flatten(1)
+
+#         converted_state_dict[new_key] = value
+#     return converted_state_dict
+
+
+llama_32_11b_vision = Llama_32_11B_Vision.from_pretrained()
+print("Loaded Llama-3.2-11B-Vision model")
