@@ -4473,7 +4473,6 @@ class VisionCrossAttentionMask(Transform):
             <img1> <img2>These  are   two  dogs. <img3> This   is    a    cat.
 
 
-
     Resultant mask is constructed per image and is of shape (text_seq_len, image_seq_len),
     where True indicates that the token outputted from the image encoder attends
     to the token in the text sequence in cross-attention. A list of these masks
@@ -5833,16 +5832,20 @@ def llama3_2_vision_transform(
     )
 
 
-if __name__ == "__main__":
-    model = llama3_2_vision_11b()
-    transform = llama3_2_vision_transform("path/to/tokenizer")
-
-    images = torch.rand(1, 3, 560, 560)
-    prompt = "Translate the following text into French: 'Hello, how are you?'"
-    tokens = transform.encode(prompt)
-    mask = torch.ones_like(tokens).bool()
-    output = model(tokens, mask, images)
-    print(output)
+# if __name__ == "__main__":
+# model = llama3_2_vision_11b().to("cuda")
+# print(model)
+# transform: Llama3VisionTransform = llama3_2_vision_transform("/tmp/Llama-3.2-11B-Vision-Instruct/tokenizer.json")
+# print(transform)
+# images = torch.rand(1, 3, 560, 560).to("cuda")
+# print(images.shape)
+# prompt = "Translate the following text into French: 'Hello, how are you?'"
+# print(prompt)
+# tokens = transform.encode(prompt).to("cuda")
+# mask = torch.ones_like(tokens).bool().to("cuda")
+# print(tokens.shape, mask.shape)
+# output = model(tokens, mask, images)
+# print(output)
 
 
 # -----------------------------------------------------------------------------
