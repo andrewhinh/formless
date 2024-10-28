@@ -69,10 +69,18 @@ def modal_get():  # noqa: C901
     # TODO: uncomment for debugging
     # os.remove(db_path)
     tables = fh.database(db_path).t
+
+    ## generations
     gens = tables.gens
     if gens not in tables:
         gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
+
+    ## api keys
+    api_keys = tables.api_keys
+    if api_keys not in tables:
+        api_keys.create(key=str, granted_at=str, session_id=str, id=int, pk="id")
+    ApiKey = api_keys.dataclass()
 
     ## global balance
     init_balance = 100
@@ -148,22 +156,25 @@ def modal_get():  # noqa: C901
         )
 
     ## api key request preview
-    def key_request_preview(key, session):
+    def key_request_preview(k, session):
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
+        if k.session_id != session["session_id"]:
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
 
-        if key["key"] and key["granted_at"]:
+        if k.key and k.granted_at:
             return fh.Tr(
-                fh.Td(key["key"]),
-                fh.Td(key["granted_at"]),
-                id=f"key-{key['key']}",
+                fh.Td(k.key),
+                fh.Td(k.granted_at),
+                id=f"key-{k.id}",
             )
         return fh.Tr(
             fh.Td("Requesting new key ..."),
             fh.Td(""),
-            id=f"key-{key['key']}",
-            hx_get=f"/keys/{key['key']}",
+            id=f"key-{k.key}",
+            hx_get=f"/keys/{k.id}",
             hx_trigger="every 2s",
             hx_swap="outerHTML",
         )
@@ -250,7 +261,10 @@ def modal_get():  # noqa: C901
         )
 
     def developer_page(session):
-        key_containers = [key_request_preview(key, session) for key in session.get("granted_keys", [])]
+        key_containers = [
+            key_request_preview(key, session)
+            for key in api_keys(limit=10, where=f"session_id == '{session['session_id']}'")
+        ]
         return fh.Main(
             fh.Group(
                 fh.Button(
@@ -306,21 +320,24 @@ def modal_get():  # noqa: C901
     ## generate the response (in a separate thread)
     @fh.threaded
     def generate_and_save(g) -> None:
-        response = requests.post(f"{os.getenv('API_URL')}/api-key")
+        k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=g.session_id))
+        generate_key_and_save(k)
+
+        response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": k.key})
         if not response.ok:
             g.response = "Failed with status code: " + str(response.status_code)
         else:
-            api_key = response.json()
-            response = requests.post(
-                os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": api_key}
-            )
-            if not response.ok:
-                g.response = "Failed with status code: " + str(response.status_code)
-            else:
-                g.response = response.json()
+            g.response = response.json()
         # TODO: uncomment for debugging
         # g.response = "temp"
         gens.update(g)
+
+    ## generate api key (in a separate thread)
+    @fh.threaded
+    def generate_key_and_save(k) -> None:
+        k.key = str(uuid.uuid4())
+        k.granted_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+        api_keys.update(k)
 
     # Routes
     @f_app.get("/")
@@ -346,51 +363,15 @@ def modal_get():  # noqa: C901
             cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
         )
 
-    ## api key request
-    @f_app.post("/request-key")
-    def generate_key(session):
-        # Check for session ID
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
-
-        # Clear button
-        clear_button = (
-            fh.Button(
-                "Clear all",
-                id="clear-keys",
-                hx_post="/clear-keys",
-                target_id="api-key-table",
-                hx_swap="innerHTML",
-                hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
-            ),
-        )
-
-        # Request a new key
-        response = requests.post(f"{os.getenv('API_URL')}/api-key")
-        if not response.ok:
-            fh.add_toast(session, "Failed to request key", "error")
-            return None
-        else:
-            api_key = response.json()
-            curr_time = time.time()
-            curr_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(curr_time))
-            key = {"key": api_key, "granted_at": curr_time}
-            session.setdefault("granted_keys", []).append(key)
-            return key_request_preview(key, session), clear_button
-
     ## pending preview keeps polling this route until we return the image preview
     @f_app.get("/gens/{id}")
     def preview(id: int, session):
         return generation_preview(gens.get(id), session)
 
     ## likewise we poll to keep the key request updated
-    @f_app.get("/keys/{key}")
-    def key_request(key: str, session):
-        for key in session.get("granted_keys", []):
-            if key["key"] == key:
-                return key_request_preview(key, session)
+    @f_app.get("/keys/{id}")
+    def key_request(id: int, session):
+        return key_request_preview(api_keys.get(id), session)
 
     ## Likewise we poll to keep the balance updated
     @f_app.get("/balance")
@@ -482,6 +463,33 @@ def modal_get():  # noqa: C901
 
         return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
 
+    ## api key request
+    @f_app.post("/request-key")
+    def generate_key(session):
+        # Check for session ID
+        if "session_id" not in session:
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
+
+        # Clear button
+        clear_button = (
+            fh.Button(
+                "Clear all",
+                id="clear-keys",
+                hx_post="/clear-keys",
+                target_id="api-key-table",
+                hx_swap="innerHTML",
+                hx_swap_oob="true",
+                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
+            ),
+        )
+
+        # Request a new key
+        k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=session["session_id"]))
+        generate_key_and_save(k)
+
+        return key_request_preview(k, session), clear_button
+
     ## clear gens
     @f_app.post("/clear-gens")
     def clear_all(session):
@@ -504,7 +512,9 @@ def modal_get():  # noqa: C901
     ## clear keys
     @f_app.post("/clear-keys")
     def clear_keys(session):
-        session["granted_keys"] = []
+        ids = [k.id for k in api_keys(where=f"session_id == '{session['session_id']}'")]
+        for id in ids:
+            api_keys.delete(id)
         clear_button = (
             fh.Button(
                 "Clear all",
@@ -601,7 +611,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add api key management
 # - replace polling routes with SSE
 # - add export to csv
 # - add user authentication

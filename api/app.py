@@ -109,7 +109,7 @@ def modal_get():
     tables = fh.database(db_path).t
     api_keys = tables.api_keys
     if api_keys not in tables:
-        api_keys.create(api_key=str, pk="api_key")
+        api_keys.create(key=str, granted_at=str, session_id=str, id=int, pk="id")
     ApiKey = api_keys.dataclass()
 
     llm = LLM(
@@ -124,7 +124,7 @@ def modal_get():
     async def verify_api_key(
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
-        if api_key_header in api_keys:
+        if api_keys(limit=1, where=f"key == '{api_key_header}'") is not None:
             return True
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
@@ -178,9 +178,12 @@ def modal_get():
 
     @f_app.post("/api-key")
     async def apikey() -> str:
-        api_key = str(uuid4())
-        api_keys.insert(ApiKey(api_key=api_key))
-        return api_key
+        k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=None))
+        k.key = str(uuid4())
+        k.granted_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+        k.session_id = str(uuid4())
+        api_keys.update(k)
+        return k.key
 
     return f_app
 
