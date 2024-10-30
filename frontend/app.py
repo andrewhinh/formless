@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 
 import modal
@@ -42,7 +43,6 @@ app = modal.App(APP_NAME)
 )
 @modal.asgi_app()
 def modal_get():  # noqa: C901
-    import time
     import uuid
 
     import requests
@@ -151,7 +151,7 @@ def modal_get():  # noqa: C901
             cls="w-2/3 flex flex-col justify-center items-center gap-4",
             id=f"gen-{g.id}",
             hx_get=f"/gens/{g.id}",
-            hx_trigger="every 2s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
         )
 
@@ -165,17 +165,64 @@ def modal_get():  # noqa: C901
             return None
 
         if k.key and k.granted_at:
-            return fh.Tr(
-                fh.Td(k.key),
-                fh.Td(k.granted_at),
-                id=f"key-{k.id}",
+            obscured_key = k.key[:4] + "*" * (len(k.key) - 4)
+            short_key = obscured_key[:8] + "..."
+
+            return (
+                fh.Tr(
+                    fh.Td(
+                        obscured_key,
+                        onmouseover=(
+                            f"if (window.innerWidth >= 768) {{"
+                            f" this.innerText = '{k.key}'; "
+                            f"}} else {{"
+                            f" this.innerText = '{short_key}'; "
+                            f"}}"
+                        ),
+                        onmouseout=(
+                            f"if (window.innerWidth >= 768) {{"
+                            f" this.innerText = '{obscured_key}'; "
+                            f"}} else {{"
+                            f" this.innerText = '{short_key}'; "
+                            f"}}"
+                        ),
+                        onclick=f"navigator.clipboard.writeText('{k.key}');",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-blue-300 hover:text-blue-100 cursor-pointer w-2/3",
+                        title="Click to copy",
+                        id="key-element",
+                    ),
+                    fh.Td(
+                        k.granted_at,
+                        cls="w-1/3",
+                    ),
+                    id=f"key-{k.id}",
+                ),
+                fh.Script(
+                    f"""
+                    function updateKeyDisplay() {{
+                        var element = document.getElementById('key-element');
+                        if (window.innerWidth >= 768) {{
+                            element.innerText = '{obscured_key}';
+                        }} else {{
+                            element.innerText = '{short_key}';
+                        }}
+                    }}
+
+                    window.onresize = updateKeyDisplay;
+                    window.onload = updateKeyDisplay;
+                    """
+                ),
             )
+
         return fh.Tr(
-            fh.Td("Requesting new key ..."),
-            fh.Td(""),
+            fh.Td("Requesting new key ...", cls="w-2/3"),
+            fh.Td("", cls="w-1/3"),
             id=f"key-{k.key}",
             hx_get=f"/keys/{k.id}",
-            hx_trigger="every 2s",
+            hx_trigger="every 0.1s",
             hx_swap="outerHTML",
         )
 
@@ -336,7 +383,7 @@ def modal_get():  # noqa: C901
     @fh.threaded
     def generate_key_and_save(k) -> None:
         k.key = str(uuid.uuid4())
-        k.granted_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+        k.granted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         api_keys.update(k)
 
     # Routes
@@ -389,7 +436,7 @@ def modal_get():  # noqa: C901
             ),
             id="balance",
             hx_get="/balance",
-            hx_trigger="every 2s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
             cls="flex flex-col gap-0.5",
         )
@@ -611,7 +658,8 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - replace polling routes with SSE
+# - add hover to reveal + click to copy api key
+# - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add export to csv
 # - add user authentication
 # - add error reporting
