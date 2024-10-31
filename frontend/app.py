@@ -192,7 +192,7 @@ def modal_get():  # noqa: C901
                         hx_swap="outerHTML",
                         cls="text-blue-300 hover:text-blue-100 cursor-pointer w-2/3",
                         title="Click to copy",
-                        id="key-element",
+                        id=f"key-element-{k.id}",
                     ),
                     fh.Td(
                         k.granted_at,
@@ -203,16 +203,19 @@ def modal_get():  # noqa: C901
                 fh.Script(
                     f"""
                     function updateKeyDisplay() {{
-                        var element = document.getElementById('key-element');
-                        if (window.innerWidth >= 768) {{
-                            element.innerText = '{obscured_key}';
-                        }} else {{
-                            element.innerText = '{short_key}';
-                        }}
+                        var elements = document.querySelectorAll('[id^="key-element-"]');
+                        elements.forEach(function(element) {{
+                            if (window.innerWidth >= 768) {{
+                                element.innerText = '{obscured_key}';
+                            }} else {{
+                                element.innerText = '{short_key}';
+                            }}
+                        }});
                     }}
 
                     window.onresize = updateKeyDisplay;
                     window.onload = updateKeyDisplay;
+                    updateKeyDisplay();
                     """
                 ),
             )
@@ -658,7 +661,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add hover to reveal + click to copy api key
 # - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add export to csv
 # - add user authentication
