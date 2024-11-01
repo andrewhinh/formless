@@ -1,6 +1,7 @@
 import os
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -137,9 +138,14 @@ def modal_get():
         print(f"Generating response to request {request_id}")
 
         image_url = body.get("image_url")
-        response = requests.get(image_url, stream=True)
-        response.raise_for_status()
-        image = Image.open(response.raw).convert("RGB")
+        # image_file = body.get("image_file")
+
+        if image_url:
+            response = requests.get(image_url, stream=True)
+            response.raise_for_status()
+            image = Image.open(response.raw).convert("RGB")
+        # else:
+        #     image = Image.open(image_file).convert("RGB")
         prompt = f"<|image|><|begin_of_text|>{config['question']}"
         stop_token_ids = None
 
@@ -180,7 +186,7 @@ def modal_get():
     async def apikey() -> str:
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=None))
         k.key = str(uuid4())
-        k.granted_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+        k.granted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         k.session_id = str(uuid4())
         api_keys.update(k)
         return k.key
@@ -206,3 +212,10 @@ def main(
         # second response is faster, because the Function is already running
         response = requests.post(modal_get.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": api_key})
         assert response.ok, response.status_code
+
+
+# TODO:
+# - fix file upload
+# - add multiple uploads
+# - Replace with custom model impl FT on hard images
+# - Add custom CUDA kernels for faster inference

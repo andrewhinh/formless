@@ -65,6 +65,8 @@ def modal_get():  # noqa: C901
     fh.setup_toasts(f_app)
 
     ## database
+    upload_dir = Path(f"/{DATA_VOLUME}/uploads")
+    upload_dir.mkdir(exist_ok=True)
     db_path = f"/{DATA_VOLUME}/main.db"
     # TODO: uncomment for debugging
     # os.remove(db_path)
@@ -73,7 +75,7 @@ def modal_get():  # noqa: C901
     ## generations
     gens = tables.gens
     if gens not in tables:
-        gens.create(image_url=str, response=str, session_id=str, id=int, pk="id")
+        gens.create(image_url=str, image_file=str, response=str, session_id=str, id=int, pk="id")
     Generation = gens.dataclass()
 
     ## api keys
@@ -128,10 +130,16 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
+        image_src = g.image_url if g.image_url else g.image_file
+
         if g.response:
             return (
                 fh.Card(
-                    fh.Img(src=g.image_url, alt="Card image", cls="w-80 object-contain"),
+                    fh.Img(
+                        src=image_src,
+                        alt="Card image",
+                        cls="w-80 object-contain",
+                    ),
                     fh.P(
                         g.response,
                         onclick="navigator.clipboard.writeText(this.innerText);",
@@ -146,7 +154,11 @@ def modal_get():  # noqa: C901
                 ),
             )
         return fh.Card(
-            fh.Img(src=g.image_url, alt="Card image", cls="w-80 object-contain"),
+            fh.Img(
+                src=image_src,
+                alt="Card image",
+                cls="w-80 object-contain",
+            ),
             fh.P("Scanning image ..."),
             cls="w-2/3 flex flex-col justify-center items-center gap-4",
             id=f"gen-{g.id}",
@@ -273,14 +285,35 @@ def modal_get():  # noqa: C901
                     ),
                     fh.Button(
                         "Scan",
+                        type="submit",
                         cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                     ),
                 ),
-                hx_post="/",
+                hx_post="/url",
                 target_id="gen-list",
                 hx_swap="afterbegin",
                 cls="w-2/3",
             ),
+            # fh.P("or", cls="text-lg"),
+            # fh.Form(
+            #     fh.Group(
+            #         fh.Input(
+            #             id="new-file",
+            #             type="file",
+            #             name="file",
+            #             cls="p-2",
+            #         ),
+            #         fh.Button(
+            #             "Scan",
+            #             type="submit",
+            #             cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+            #         ),
+            #     ),
+            #     hx_post="/upload",
+            #     target_id="gen-list",
+            #     hx_swap="afterbegin",
+            #     cls="w-2/3",
+            # ),
             fh.Button(
                 "Clear all",
                 id="clear-gens",
@@ -373,7 +406,13 @@ def modal_get():  # noqa: C901
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=g.session_id))
         generate_key_and_save(k)
 
-        response = requests.post(os.getenv("API_URL"), json={"image_url": g.image_url}, headers={"X-API-Key": k.key})
+        if g.image_url:
+            request = {"image_url": g.image_url}
+        # elif g.image_file:
+        #     request = {"image_file": g.image_file}
+
+        response = requests.post(os.getenv("API_URL"), json=request, headers={"X-API-Key": k.key})
+
         if not response.ok:
             g.response = "Failed with status code: " + str(response.status_code)
         else:
@@ -458,8 +497,8 @@ def modal_get():  # noqa: C901
             return fh.FileResponse(static_file_path)
 
     ## generation route
-    @f_app.post("/")
-    def generate_text(session, image_url: str = None):
+    @f_app.post("/url")
+    def generate_from_url(session, image_url: str):
         # Check for session ID
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -512,6 +551,58 @@ def modal_get():  # noqa: C901
         generate_and_save(g)
 
         return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
+
+    # @f_app.post("/upload")
+    # async def generate_from_upload(session, file: fh.UploadFile):
+    #     # Check for session ID
+    #     if "session_id" not in session:
+    #         fh.add_toast(session, "Please refresh the page", "error")
+    #         return None
+
+    #     # Write file to disk
+    #     filebuffer = await file.read()
+    #     upload_path = upload_dir / (str(uuid.uuid4()) + "_" + file.filename)
+    #     upload_path.write_bytes(filebuffer)
+
+    #     # Warn if we're out of balance
+    #     curr_balance = get_curr_balance()
+    #     if curr_balance.balance < 1:
+    #         fh.add_toast(session, "Out of balance!", "error")
+    #         return None
+
+    #     # Decrement balance
+    #     curr_balance.balance -= 1
+    #     global_balance.update(curr_balance)
+
+    #     # Clear input and button
+    #     clear_input = fh.Input(
+    #         id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
+    #     )
+    #     clear_c_button = (
+    #         fh.Button(
+    #             "Clear all",
+    #             id="clear-gens",
+    #             hx_post="/clear-gens",
+    #             target_id="gen-list",
+    #             hx_swap="innerHTML",
+    #             hx_swap_oob="true",
+    #             cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
+    #         ),
+    #     )
+    #     # clear_e_button = (
+    #     #     fh.Button(
+    #     #         "Export to CSV",
+    #     #         id="export-csv",
+    #     #         hx_get="/export",
+    #     #         cls="text-green-300 hover:text-green-100 p-2 w-1/3 border-green-300 border-2 hover:border-green-100",
+    #     #     ),
+    #     # )
+
+    #     # Generate as before
+    #     g = gens.insert(Generation(image_file=str(upload_path), session_id=session["session_id"]))
+    #     generate_and_save(g)
+
+    #     return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
 
     ## api key request
     @f_app.post("/request-key")
@@ -661,7 +752,12 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
+# - replace failure with toast
+# - fix file upload
+# - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+# - add multiple file uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
+# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
 # - add export to csv
-# - add user authentication
 # - add error reporting
+# - add smooth db migrations
