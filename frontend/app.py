@@ -19,7 +19,12 @@ in_prod = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
 FE_IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .pip_install(  # add Python dependencies
-        "python-fasthtml==0.6.10", "simpleicons==7.21.0", "requests==2.32.3", "sqlite-utils==3.18", "stripe==11.1.0"
+        "python-fasthtml==0.6.10",
+        "simpleicons==7.21.0",
+        "requests==2.32.3",
+        "sqlite-utils==3.18",
+        "stripe==11.1.0",
+        "validators==0.34.0",
     )
     .copy_local_dir(parent_path, "/root/")
 )
@@ -47,6 +52,7 @@ def modal_get():  # noqa: C901
 
     import requests
     import stripe
+    import validators
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
@@ -402,7 +408,7 @@ def modal_get():  # noqa: C901
 
     ## generate the response (in a separate thread)
     @fh.threaded
-    def generate_and_save(g) -> None:
+    def generate_and_save(session, g):
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=g.session_id))
         generate_key_and_save(k)
 
@@ -411,14 +417,23 @@ def modal_get():  # noqa: C901
         # elif g.image_file:
         #     request = {"image_file": g.image_file}
 
-        response = requests.post(os.getenv("API_URL"), json=request, headers={"X-API-Key": k.key})
-
-        if not response.ok:
-            g.response = "Failed with status code: " + str(response.status_code)
-        else:
-            g.response = response.json()
         # TODO: uncomment for debugging
         # g.response = "temp"
+        # gens.update(g)
+        # return True
+
+        response = requests.post(os.getenv("API_URL"), json=request, headers={"X-API-Key": k.key})
+        # TODO: uncomment for debugging
+        # response = requests.Response()
+        # response.status_code = 500
+
+        if not response.ok:
+            message = "Failed with status code: " + str(response.status_code)
+            g.response = message
+            gens.update(g)
+            return False
+        else:
+            g.response = response.json()
         gens.update(g)
 
     ## generate api key (in a separate thread)
@@ -508,7 +523,7 @@ def modal_get():  # noqa: C901
         if not image_url:
             fh.add_toast(session, "No image URL provided", "error")
             return None
-        if requests.head(image_url).headers["content-type"] not in ("image/png", "image/jpeg", "image/jpg"):
+        if not validators.url(image_url):
             fh.add_toast(session, "Invalid image URL", "error")
             return None
 
@@ -548,8 +563,10 @@ def modal_get():  # noqa: C901
 
         # Generate as before
         g = gens.insert(Generation(image_url=image_url, session_id=session["session_id"]))
-        generate_and_save(g)
-
+        ok = generate_and_save(session, g)
+        if not ok:
+            fh.add_toast(session, "Failed to generate response", "error")
+            return None
         return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
 
     # @f_app.post("/upload")
@@ -752,12 +769,12 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - replace failure with toast
+# - fix failed response handling
+# - add error reporting
+# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
 # - fix file upload
+# - add export to csv
 # - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 # - add multiple file uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
-# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
-# - add export to csv
-# - add error reporting
 # - add smooth db migrations
