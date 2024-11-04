@@ -207,8 +207,8 @@ def modal_get():  # noqa: C901
             short_key = obscured_key[:8] + "..."
 
             return (
-                fh.Tr(
-                    fh.Td(
+                fh.Group(
+                    fh.Div(
                         obscured_key,
                         onmouseover=(
                             f"if (window.innerWidth >= 768) {{"
@@ -232,23 +232,24 @@ def modal_get():  # noqa: C901
                         title="Click to copy",
                         id=f"key-element-{k.id}",
                     ),
-                    fh.Td(
+                    fh.Div(
                         k.granted_at,
                         cls="w-1/3",
                     ),
                     id=f"key-{k.id}",
+                    cls="flex",
                 ),
                 fh.Script(
                     f"""
                     function updateKeyDisplay() {{
-                        var elements = document.querySelectorAll('[id^="key-element-"]');
-                        elements.forEach(function(element) {{
+                        var element = document.getElementById('key-element-{k.id}');
+                        if (element) {{
                             if (window.innerWidth >= 768) {{
                                 element.innerText = '{obscured_key}';
                             }} else {{
                                 element.innerText = '{short_key}';
                             }}
-                        }});
+                        }}
                     }}
 
                     window.onresize = updateKeyDisplay;
@@ -257,10 +258,11 @@ def modal_get():  # noqa: C901
                     """
                 ),
             )
-        return fh.Tr(
-            fh.Td("Requesting new key ...", cls="w-2/3"),
-            fh.Td("", cls="w-1/3"),
+        return fh.Group(
+            fh.Div("Requesting new key ...", cls="w-2/3"),
+            fh.Div("", cls="w-1/3"),
             id=f"key-{k.key}",
+            cls="flex",
             hx_get=f"/keys/{k.id}",
             hx_trigger="every 0.1s",
             hx_swap="outerHTML",
@@ -293,6 +295,7 @@ def modal_get():  # noqa: C901
                 cls="flex flex-col items-end md:flex-row md:items-center gap-4 md:gap-8",
             ),
             cls="flex justify-between p-4",
+            style="max-height: 20vh;",
         )
 
     def main_content(session):
@@ -356,8 +359,14 @@ def modal_get():  # noqa: C901
             #     ),
             #     cls="flex justify-center gap-4 w-2/3",
             # ),
-            fh.Div(*gen_containers[::-1], id="gen-list", cls="flex flex-col justify-center items-center gap-4"),
-            cls="flex flex-col justify-center items-center gap-4 p-20",
+            fh.Div(
+                *gen_containers[::-1],
+                id="gen-list",
+                cls="flex flex-col justify-center items-center gap-4 overflow-auto",
+                style="max-height: 50vh;",
+            ),
+            cls="flex flex-col justify-center items-center gap-8 p-8",
+            style="max-height: 60vh;",
         )
 
     def developer_page(session):
@@ -385,16 +394,22 @@ def modal_get():  # noqa: C901
                 ),
                 cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
             ),
-            fh.Table(
-                fh.Tr(
-                    fh.Th("Key"),
-                    fh.Th("Granted At"),
-                    cls="font-bold",
+            fh.Group(
+                fh.Group(
+                    fh.Div("Key", cls="font-bold w-2/3"),
+                    fh.Div("Granted At", cls="font-bold w-1/3"),
+                    cls="flex",
                 ),
-                fh.Tbody(*key_containers[::-1], id="api-key-table"),
-                cls="text-sm md:text-lg w-2/3 border-slate-500 border-2",
+                fh.Div(
+                    *key_containers[::-1],
+                    id="api-key-table",
+                    cls="overflow-auto",
+                    style="max-height: 45vh;",
+                ),
+                cls="flex flex-col gap-4 text-sm md:text-lg w-2/3 border-slate-500 border-2",
             ),
             cls="flex flex-col justify-center items-center gap-4",
+            style="max-height: 60vh;",
         )
 
     def toast_container():
@@ -413,6 +428,7 @@ def modal_get():  # noqa: C901
                 cls="flex flex-col text-right gap-0.5",
             ),
             cls="flex justify-between p-4 text-sm md:text-lg",
+            style="max-height: 20vh;",
         )
 
     # background tasks (separate threads)
@@ -533,7 +549,7 @@ def modal_get():  # noqa: C901
                 hx_post="/clear-gens",
                 target_id="gen-list",
                 hx_swap="innerHTML",
-                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
+                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
             )
             if curr_gens
             else None,
@@ -666,7 +682,7 @@ def modal_get():  # noqa: C901
                 target_id="gen-list",
                 hx_swap="innerHTML",
                 hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
+                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
             ),
         )
         return None, clear_button
@@ -685,7 +701,7 @@ def modal_get():  # noqa: C901
                 target_id="api-key-table",
                 hx_swap="innerHTML",
                 hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
+                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
             ),
         )
         return None, clear_button
