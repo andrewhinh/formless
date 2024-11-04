@@ -56,8 +56,6 @@ def modal_get():  # noqa: C901
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
-    # Setup
-    ## FastHTML
     f_app, _ = fh.fast_app(
         ws_hdr=True,
         hdrs=[
@@ -70,7 +68,7 @@ def modal_get():  # noqa: C901
     )
     fh.setup_toasts(f_app)
 
-    ## database
+    # database
     upload_dir = Path(f"/{DATA_VOLUME}/uploads")
     upload_dir.mkdir(exist_ok=True)
     db_path = f"/{DATA_VOLUME}/main.db"
@@ -81,8 +79,21 @@ def modal_get():  # noqa: C901
     ## generations
     gens = tables.gens
     if gens not in tables:
-        gens.create(image_url=str, image_file=str, response=str, session_id=str, id=int, pk="id")
+        gens.create(
+            image_url=str,
+            image_file=str,
+            failed=bool,
+            response=str,
+            session_id=str,
+            id=int,
+            pk="id",
+        )
     Generation = gens.dataclass()
+
+    def get_curr_gens(session):
+        curr_gens = gens(where=f"session_id == '{session['session_id']}'")
+        curr_gens = [g for g in curr_gens if not g.failed]  # TODO: limitation of sqlite-utils
+        return curr_gens
 
     ## api keys
     api_keys = tables.api_keys
@@ -104,12 +115,12 @@ def modal_get():  # noqa: C901
             global_balance.insert(Balance(balance=init_balance))
             return global_balance.get(1)
 
-    ## stripe
+    # stripe
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
     webhook_secret = os.environ["STRIPE_WEBHOOK_SECRET"]
     DOMAIN: str = os.environ["DOMAIN"]
 
-    # Components
+    # components
     def icon(
         svg,
         width="35",
@@ -129,16 +140,22 @@ def modal_get():  # noqa: C901
 
     ## preview while waiting for response
     def generation_preview(g, session):
+        ### check if g and session are valid
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
+            return None
+        try:
+            gens.get(g.id)
+        except Exception:
             return None
         if g.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
         image_src = g.image_url if g.image_url else g.image_file
-
-        if g.response:
+        if g.failed:
+            return None
+        elif g.response:
             return (
                 fh.Card(
                     fh.Img(
@@ -173,10 +190,13 @@ def modal_get():  # noqa: C901
             hx_swap="outerHTML",
         )
 
-    ## api key request preview
     def key_request_preview(k, session):
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
+            return None
+        try:
+            api_keys.get(k.id)
+        except Exception:
             return None
         if k.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -237,7 +257,6 @@ def modal_get():  # noqa: C901
                     """
                 ),
             )
-
         return fh.Tr(
             fh.Td("Requesting new key ...", cls="w-2/3"),
             fh.Td("", cls="w-1/3"),
@@ -247,7 +266,7 @@ def modal_get():  # noqa: C901
             hx_swap="outerHTML",
         )
 
-    # Layout
+    # layout
     def nav():
         return fh.Nav(
             fh.A(
@@ -277,9 +296,8 @@ def modal_get():  # noqa: C901
         )
 
     def main_content(session):
-        gen_containers = [
-            generation_preview(g, session) for g in gens(limit=10, where=f"session_id == '{session['session_id']}'")
-        ]
+        curr_gens = get_curr_gens(session)
+        gen_containers = [generation_preview(g, session) for g in curr_gens]
         return fh.Main(
             fh.Form(
                 fh.Group(
@@ -320,14 +338,7 @@ def modal_get():  # noqa: C901
             #     hx_swap="afterbegin",
             #     cls="w-2/3",
             # ),
-            fh.Button(
-                "Clear all",
-                id="clear-gens",
-                hx_post="/clear-gens",
-                target_id="gen-list",
-                hx_swap="innerHTML",
-                cls=f"text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100 {'hidden' if not gen_containers else ''}",
-            ),
+            get_clear_button(session),  # clear all button, hidden if no gens
             # fh.Div(
             #     fh.Button(
             #         "Clear all",
@@ -346,7 +357,7 @@ def modal_get():  # noqa: C901
             #     cls="flex justify-center gap-4 w-2/3",
             # ),
             fh.Div(*gen_containers[::-1], id="gen-list", cls="flex flex-col justify-center items-center gap-4"),
-            cls="flex flex-col justify-center items-center gap-4",
+            cls="flex flex-col justify-center items-center gap-4 p-20",
         )
 
     def developer_page(session):
@@ -391,7 +402,7 @@ def modal_get():  # noqa: C901
 
     def footer():
         return fh.Footer(
-            get_balance(),  # Live-updating balance
+            get_balance(),  # live-updating balance
             fh.Div(
                 fh.P("Made by"),
                 fh.A(
@@ -404,9 +415,8 @@ def modal_get():  # noqa: C901
             cls="flex justify-between p-4 text-sm md:text-lg",
         )
 
-    # Helper fns
-
-    ## generate the response (in a separate thread)
+    # background tasks (separate threads)
+    ## generation
     @fh.threaded
     def generate_and_save(session, g):
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=g.session_id))
@@ -414,13 +424,13 @@ def modal_get():  # noqa: C901
 
         if g.image_url:
             request = {"image_url": g.image_url}
-        # elif g.image_file:
-        #     request = {"image_file": g.image_file}
+        elif g.image_file:
+            request = {"image_file": g.image_file}
 
         # TODO: uncomment for debugging
         # g.response = "temp"
         # gens.update(g)
-        # return True
+        # return
 
         response = requests.post(os.getenv("API_URL"), json=request, headers={"X-API-Key": k.key})
         # TODO: uncomment for debugging
@@ -428,22 +438,34 @@ def modal_get():  # noqa: C901
         # response.status_code = 500
 
         if not response.ok:
-            message = "Failed with status code: " + str(response.status_code)
-            g.response = message
-            gens.update(g)
-            return False
+            fh.add_toast(session, "Failed with status code: " + str(response.status_code), "error")
+            g.failed = True
         else:
             g.response = response.json()
         gens.update(g)
 
-    ## generate api key (in a separate thread)
+    ## key generation
     @fh.threaded
     def generate_key_and_save(k) -> None:
         k.key = str(uuid.uuid4())
         k.granted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         api_keys.update(k)
 
-    # Routes
+    # routes
+    ## for images, CSS, etc.
+    @f_app.get("/{fname:path}.{ext:static}")
+    async def static_files(fname: str, ext: str):
+        static_file_path = parent_path / f"{fname}.{ext}"
+        if static_file_path.exists():
+            return fh.FileResponse(static_file_path)
+
+    ## toasts without target
+    @f_app.post("/toast")
+    async def toast(session, message: str, type: str):
+        fh.add_toast(session, message, type)
+        return fh.Div(id="toast-container", cls="hidden")
+
+    ## home page
     @f_app.get("/")
     async def home(session):
         if "session_id" not in session:
@@ -459,6 +481,8 @@ def modal_get():  # noqa: C901
     ## developer page
     @f_app.get("/developer")
     def developer(session):
+        if "session_id" not in session:
+            session["session_id"] = str(uuid.uuid4())
         return fh.Title(NAME + " | " + "developer"), fh.Div(
             nav(),
             developer_page(session),
@@ -467,7 +491,7 @@ def modal_get():  # noqa: C901
             cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
         )
 
-    ## pending preview keeps polling this route until we return the image preview
+    ## pending preview keeps polling this route until response is ready
     @f_app.get("/gens/{id}")
     def preview(id: int, session):
         return generation_preview(gens.get(id), session)
@@ -477,7 +501,7 @@ def modal_get():  # noqa: C901
     def key_request(id: int, session):
         return key_request_preview(api_keys.get(id), session)
 
-    ## Likewise we poll to keep the balance updated
+    ## likewise we poll to keep the balance updated
     @f_app.get("/balance")
     def get_balance():
         curr_balance = get_curr_balance()
@@ -498,28 +522,35 @@ def modal_get():  # noqa: C901
             cls="flex flex-col gap-0.5",
         )
 
-    ## toasts without target
-    @f_app.post("/toast")
-    async def toast(session, message: str, type: str):
-        fh.add_toast(session, message, type)
-        return fh.Div(id="toast-container", cls="hidden")
-
-    ## for images, CSS, etc.
-    @f_app.get("/{fname:path}.{ext:static}")
-    async def static_files(fname: str, ext: str):
-        static_file_path = parent_path / f"{fname}.{ext}"
-        if static_file_path.exists():
-            return fh.FileResponse(static_file_path)
+    ## likewise we poll to keep the clear button updated and functional
+    @f_app.get("/clear-button")
+    def get_clear_button(session):
+        curr_gens = get_curr_gens(session)
+        return fh.Div(
+            fh.Button(
+                "Clear all",
+                id="clear-gens",
+                hx_post="/clear-gens",
+                target_id="gen-list",
+                hx_swap="innerHTML",
+                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
+            )
+            if curr_gens
+            else None,
+            id="clear-button-container",
+            hx_get="/clear-button",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex items-center justify-center w-2/3",
+        )
 
     ## generation route
     @f_app.post("/url")
     def generate_from_url(session, image_url: str):
-        # Check for session ID
+        # validation
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-
-        # Check image URL
         if not image_url:
             fh.add_toast(session, "No image URL provided", "error")
             return None
@@ -537,37 +568,15 @@ def modal_get():  # noqa: C901
         curr_balance.balance -= 1
         global_balance.update(curr_balance)
 
-        # Clear input and button
+        # Clear input
         clear_input = fh.Input(
             id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
         )
-        clear_c_button = (
-            fh.Button(
-                "Clear all",
-                id="clear-gens",
-                hx_post="/clear-gens",
-                target_id="gen-list",
-                hx_swap="innerHTML",
-                hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
-            ),
-        )
-        # clear_e_button = (
-        #     fh.Button(
-        #         "Export to CSV",
-        #         id="export-csv",
-        #         hx_get="/export",
-        #         cls="text-green-300 hover:text-green-100 p-2 w-1/3 border-green-300 border-2 hover:border-green-100",
-        #     ),
-        # )
 
         # Generate as before
         g = gens.insert(Generation(image_url=image_url, session_id=session["session_id"]))
-        ok = generate_and_save(session, g)
-        if not ok:
-            fh.add_toast(session, "Failed to generate response", "error")
-            return None
-        return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
+        generate_and_save(session, g)
+        return generation_preview(g, session), clear_input
 
     # @f_app.post("/upload")
     # async def generate_from_upload(session, file: fh.UploadFile):
@@ -624,12 +633,10 @@ def modal_get():  # noqa: C901
     ## api key request
     @f_app.post("/request-key")
     def generate_key(session):
-        # Check for session ID
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
-        # Clear button
         clear_button = (
             fh.Button(
                 "Clear all",
@@ -641,11 +648,8 @@ def modal_get():  # noqa: C901
                 cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
             ),
         )
-
-        # Request a new key
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=session["session_id"]))
         generate_key_and_save(k)
-
         return key_request_preview(k, session), clear_button
 
     ## clear gens
@@ -697,13 +701,12 @@ def modal_get():  # noqa: C901
 
     #     return fh.FileResponse(output.getvalue(), headers={"Content-Disposition": "attachment; filename=export.csv"})
 
-    ## We send the user here to buy credits
+    ## send the user here to buy credits
     @f_app.get("/buy_global")
     def buy_credits(session):
         if "session_id" not in session:
             return "Error no session id"
 
-        # Create Stripe Checkout Session
         s = stripe.checkout.Session.create(
             payment_method_types=["card"],
             line_items=[
@@ -722,8 +725,7 @@ def modal_get():  # noqa: C901
             success_url=DOMAIN + "/success?session_id={CHECKOUT_SESSION_ID}",
             cancel_url=DOMAIN + "/cancel",
         )
-
-        # Send the USER to STRIPE
+        ### send the USER to STRIPE
         return fh.RedirectResponse(s["url"])
 
     ## STRIPE sends the USER here after a payment was canceled.
@@ -739,27 +741,27 @@ def modal_get():  # noqa: C901
     ## STRIPE calls this to tell APP when a payment was completed.
     @f_app.post("/webhook")
     async def stripe_webhook(request):
-        print(request)
-        print("Received webhook")
+        # print(request)
+        # print("Received webhook")
         payload = await request.body()
         payload = payload.decode("utf-8")
         signature = request.headers.get("stripe-signature")
-        print(payload)
+        # print(payload)
 
-        # Verify the Stripe webhook signature
+        # verify the Stripe webhook signature
         try:
             event = stripe.Webhook.construct_event(payload, signature, webhook_secret)
         except ValueError:
-            print("Invalid payload")
+            # print("Invalid payload")
             return {"error": "Invalid payload"}, 400
         except stripe.error.SignatureVerificationError:
-            print("Invalid signature")
+            # print("Invalid signature")
             return {"error": "Invalid signature"}, 400
 
-        # Handle the event
+        # handle the event
         if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
-            print("Session completed", session)
+            # session = event["data"]["object"]
+            # print("Session completed", session)
             curr_balance = get_curr_balance()
             curr_balance.balance += 50
             global_balance.update(curr_balance)
@@ -769,12 +771,10 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - fix failed response handling
-# - add error reporting
-# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
-# - fix file upload
 # - add export to csv
+# - fix file upload
 # - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 # - add multiple file uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
+# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
 # - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
-# - add smooth db migrations
+# - add smooth db migrations: prob switch to sqlmodel + alembic
