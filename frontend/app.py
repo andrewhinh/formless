@@ -48,6 +48,8 @@ app = modal.App(APP_NAME)
 )
 @modal.asgi_app()
 def modal_get():  # noqa: C901
+    import csv
+    import io
     import uuid
 
     import requests
@@ -80,6 +82,7 @@ def modal_get():  # noqa: C901
     gens = tables.gens
     if gens not in tables:
         gens.create(
+            request_at=str,
             image_url=str,
             image_file=str,
             failed=bool,
@@ -341,24 +344,11 @@ def modal_get():  # noqa: C901
             #     hx_swap="afterbegin",
             #     cls="w-2/3",
             # ),
-            get_clear_button(session),  # clear all button, hidden if no gens
-            # fh.Div(
-            #     fh.Button(
-            #         "Clear all",
-            #         id="clear-all",
-            #         hx_post="/clear",
-            #         target_id="gen-list",
-            #         hx_swap="innerHTML",
-            #         cls=f"text-red-300 hover:text-red-100 p-2 w-full border-red-300 border-2 hover:border-red-100 {'hidden' if not gen_containers else ''}",
-            #     ),
-            #     fh.Button(
-            #         "Export to CSV",
-            #         id="export-csv",
-            #         hx_get="/export",
-            #         cls=f"text-green-300 hover:text-green-100 p-2 w-full border-green-300 border-2 hover:border-green-100 {'hidden' if not gen_containers else ''}",
-            #     ),
-            #     cls="flex justify-center gap-4 w-2/3",
-            # ),
+            fh.Div(
+                get_clear_gens_button(session),  # clear all button, hidden if no gens
+                get_export_gens_button(session),  # export to csv button, hidden if no gens
+                cls="flex justify-center gap-4 w-2/3",
+            ),
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
@@ -486,12 +476,25 @@ def modal_get():  # noqa: C901
     async def home(session):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
-        return fh.Title(NAME), fh.Div(
-            nav(),
-            main_content(session),
-            toast_container(),
-            footer(),
-            cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+        return (
+            fh.Title(NAME),
+            fh.Div(
+                nav(),
+                main_content(session),
+                toast_container(),
+                footer(),
+                cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+            ),
+            fh.Script(
+                """
+                document.addEventListener('htmx:beforeRequest', (event) => {
+                    if (event.target.id === 'export-gens-csv') {
+                        event.preventDefault();
+                        window.location.href = "/export-gens";
+                    }
+                });
+            """
+            ),
         )
 
     ## developer page
@@ -539,8 +542,8 @@ def modal_get():  # noqa: C901
         )
 
     ## likewise we poll to keep the clear button updated and functional
-    @f_app.get("/clear-button")
-    def get_clear_button(session):
+    @f_app.get("/clear-gens-button")
+    def get_clear_gens_button(session):
         curr_gens = get_curr_gens(session)
         return fh.Div(
             fh.Button(
@@ -549,15 +552,37 @@ def modal_get():  # noqa: C901
                 hx_post="/clear-gens",
                 target_id="gen-list",
                 hx_swap="innerHTML",
-                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
+                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full",
             )
             if curr_gens
             else None,
-            id="clear-button-container",
-            hx_get="/clear-button",
+            id="clear-gens-button-container",
+            hx_get="/clear-gens-button",
             hx_trigger="every 1s",
             hx_swap="outerHTML",
-            cls="flex items-center justify-center w-2/3",
+            cls="flex items-center justify-center w-full",
+        )
+
+    ## likewise we poll to keep the export button updated and functional
+    @f_app.get("/export-gens-button")
+    def get_export_gens_button(session):
+        curr_gens = get_curr_gens(session)
+        return fh.Div(
+            fh.Button(
+                "Export to CSV",
+                id="export-gens-csv",
+                hx_get="/export-gens",
+                hx_target="this",
+                hx_swap="none",
+                cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full",
+            )
+            if curr_gens
+            else None,
+            id="export-gens-button-container",
+            hx_get="/export-gens-button",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex items-center justify-center w-full",
         )
 
     ## generation route
@@ -590,7 +615,13 @@ def modal_get():  # noqa: C901
         )
 
         # Generate as before
-        g = gens.insert(Generation(image_url=image_url, session_id=session["session_id"]))
+        g = gens.insert(
+            Generation(
+                request_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                image_url=image_url,
+                session_id=session["session_id"],
+            )
+        )
         generate_and_save(session, g)
         return generation_preview(g, session), clear_input
 
@@ -674,18 +705,27 @@ def modal_get():  # noqa: C901
         ids = [g.id for g in gens(where=f"session_id == '{session['session_id']}'")]
         for id in ids:
             gens.delete(id)
-        clear_button = (
-            fh.Button(
-                "Clear all",
-                id="clear-gens",
-                hx_post="/clear-gens",
-                target_id="gen-list",
-                hx_swap="innerHTML",
-                hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
-            ),
+        return None
+
+    ## export gens to CSV
+    @f_app.get("/export-gens")
+    async def export_gens(req):
+        session = req.session
+        curr_gens = get_curr_gens(session)
+        if not curr_gens:
+            return fh.Response("No generations found.", media_type="text/plain")
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["request_at", "image_url", "response", "failed"])  # g.image_file,
+        for g in curr_gens:
+            writer.writerow([g.request_at, g.image_url, g.response, g.failed])  # g.image_file,
+
+        output.seek(0)
+        response = fh.Response(
+            output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=gens.csv"}
         )
-        return None, clear_button
+        return response
 
     ## clear keys
     @f_app.post("/clear-keys")
@@ -705,17 +745,6 @@ def modal_get():  # noqa: C901
             ),
         )
         return None, clear_button
-
-    # ## export to CSV
-    # @f_app.get("/export")
-    # def export(session):
-    #     output = io.StringIO()
-    #     writer = csv.writer(output)
-    #     writer.writerow(["image_url", "response"])
-    #     for g in gens(where=f"session_id == '{session['session_id']}'"):
-    #         writer.writerow([g.image_url, g.response])
-
-    #     return fh.FileResponse(output.getvalue(), headers={"Content-Disposition": "attachment; filename=export.csv"})
 
     ## send the user here to buy credits
     @f_app.get("/buy_global")
@@ -787,7 +816,7 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add export to csv
+# - add export to csv for api keys
 # - fix file upload
 # - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads

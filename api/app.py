@@ -215,6 +215,7 @@ def main(
 
 
 # TODO:
+# - add input validation
 # - add file upload security
 # - add multiple uploads/urls
 # - add text prompt
