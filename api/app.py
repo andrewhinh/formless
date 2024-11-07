@@ -215,8 +215,9 @@ def main(
 
 
 # TODO:
-# - fix file upload
-# - add multiple uploads
-# - add user authentication
+# - add file upload security
+# - add multiple uploads/urls
+# - add text prompt
+
 # - Replace with custom model impl FT on hard images
 # - Add custom CUDA kernels for faster inference
