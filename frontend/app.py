@@ -365,24 +365,18 @@ def modal_get():  # noqa: C901
             for key in api_keys(limit=10, where=f"session_id == '{session['session_id']}'")
         ]
         return fh.Main(
-            fh.Group(
-                fh.Button(
-                    "Request New Key",
-                    id="request-new-key",
-                    hx_post="/request-key",
-                    target_id="api-key-table",
-                    hx_swap="afterbegin",
-                    cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-1/3 border-blue-300 border-2 hover:border-blue-100",
-                ),
-                fh.Button(
-                    "Clear all",
-                    id="clear-keys",
-                    hx_post="/clear-keys",
-                    target_id="api-key-table",
-                    hx_swap="innerHTML",
-                    cls=f"text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 {'hidden' if not key_containers else ''}",
-                ),
-                cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
+            fh.Button(
+                "Request New Key",
+                id="request-new-key",
+                hx_post="/request-key",
+                target_id="api-key-table",
+                hx_swap="afterbegin",
+                cls="text-blue-300 hover:text-blue-100 p-2 w-2/3 border-blue-300 border-2 hover:border-blue-100",
+            ),
+            fh.Div(
+                get_clear_keys_button(session),
+                get_export_keys_button(session),
+                cls="flex justify-center gap-4 w-2/3",
             ),
             fh.Group(
                 fh.Group(
@@ -502,12 +496,25 @@ def modal_get():  # noqa: C901
     def developer(session):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
-        return fh.Title(NAME + " | " + "developer"), fh.Div(
-            nav(),
-            developer_page(session),
-            toast_container(),
-            footer(),
-            cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+        return (
+            fh.Title(NAME + " | " + "developer"),
+            fh.Div(
+                nav(),
+                developer_page(session),
+                toast_container(),
+                footer(),
+                cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+            ),
+            fh.Script(
+                """
+                document.addEventListener('htmx:beforeRequest', (event) => {
+                    if (event.target.id === 'export-keys-csv') {
+                        event.preventDefault();
+                        window.location.href = "/export-keys";
+                    }
+                });
+            """
+            ),
         )
 
     ## pending preview keeps polling this route until response is ready
@@ -520,7 +527,6 @@ def modal_get():  # noqa: C901
     def key_request(id: int, session):
         return key_request_preview(api_keys.get(id), session)
 
-    ## likewise we poll to keep the balance updated
     @f_app.get("/balance")
     def get_balance():
         curr_balance = get_curr_balance()
@@ -541,7 +547,6 @@ def modal_get():  # noqa: C901
             cls="flex flex-col gap-0.5",
         )
 
-    ## likewise we poll to keep the clear button updated and functional
     @f_app.get("/clear-gens-button")
     def get_clear_gens_button(session):
         curr_gens = get_curr_gens(session)
@@ -563,7 +568,6 @@ def modal_get():  # noqa: C901
             cls="flex items-center justify-center w-full",
         )
 
-    ## likewise we poll to keep the export button updated and functional
     @f_app.get("/export-gens-button")
     def get_export_gens_button(session):
         curr_gens = get_curr_gens(session)
@@ -580,6 +584,48 @@ def modal_get():  # noqa: C901
             else None,
             id="export-gens-button-container",
             hx_get="/export-gens-button",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex items-center justify-center w-full",
+        )
+
+    @f_app.get("/clear-keys-button")
+    def get_clear_keys_button(session):
+        curr_keys = api_keys(where=f"session_id == '{session['session_id']}'")
+        return fh.Div(
+            fh.Button(
+                "Clear all",
+                id="clear-keys",
+                hx_post="/clear-keys",
+                target_id="api-key-table",
+                hx_swap="innerHTML",
+                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full",
+            )
+            if curr_keys
+            else None,
+            id="clear-keys-button-container",
+            hx_get="/clear-keys-button",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex items-center justify-center w-full",
+        )
+
+    @f_app.get("/export-keys-button")
+    def get_export_keys_button(session):
+        curr_keys = api_keys(where=f"session_id == '{session['session_id']}'")
+        return fh.Div(
+            fh.Button(
+                "Export to CSV",
+                id="export-keys-csv",
+                hx_get="/export-keys",
+                hx_target="this",
+                hx_swap="none",
+                cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full",
+            )
+            if curr_keys
+            else None,
+            id="export-keys-button-container",
+            hx_get="/export-keys-button",
             hx_trigger="every 1s",
             hx_swap="outerHTML",
             cls="flex items-center justify-center w-full",
@@ -707,6 +753,25 @@ def modal_get():  # noqa: C901
             gens.delete(id)
         return None
 
+    ## clear keys
+    @f_app.post("/clear-keys")
+    def clear_keys(session):
+        ids = [k.id for k in api_keys(where=f"session_id == '{session['session_id']}'")]
+        for id in ids:
+            api_keys.delete(id)
+        clear_button = (
+            fh.Button(
+                "Clear all",
+                id="clear-keys",
+                hx_post="/clear-keys",
+                target_id="api-key-table",
+                hx_swap="innerHTML",
+                hx_swap_oob="true",
+                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
+            ),
+        )
+        return None, clear_button
+
     ## export gens to CSV
     @f_app.get("/export-gens")
     async def export_gens(req):
@@ -727,24 +792,25 @@ def modal_get():  # noqa: C901
         )
         return response
 
-    ## clear keys
-    @f_app.post("/clear-keys")
-    def clear_keys(session):
-        ids = [k.id for k in api_keys(where=f"session_id == '{session['session_id']}'")]
-        for id in ids:
-            api_keys.delete(id)
-        clear_button = (
-            fh.Button(
-                "Clear all",
-                id="clear-keys",
-                hx_post="/clear-keys",
-                target_id="api-key-table",
-                hx_swap="innerHTML",
-                hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
-            ),
+    ## export keys to CSV
+    @f_app.get("/export-keys")
+    async def export_keys(req):
+        session = req.session
+        curr_keys = api_keys(where=f"session_id == '{session['session_id']}'")
+        if not curr_keys:
+            return fh.Response("No keys found.", media_type="text/plain")
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["key", "granted_at"])
+        for k in curr_keys:
+            writer.writerow([k.key, k.granted_at])
+
+        output.seek(0)
+        response = fh.Response(
+            output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=keys.csv"}
         )
-        return None, clear_button
+        return response
 
     ## send the user here to buy credits
     @f_app.get("/buy_global")
@@ -816,7 +882,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add export to csv for api keys
 # - fix file upload
 # - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
