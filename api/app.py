@@ -99,6 +99,7 @@ app = modal.App(name=APP_NAME)
 @modal.asgi_app()
 def modal_get():
     import requests
+    import validators
     from fasthtml import common as fh
     from PIL import Image
     from term_image.image import from_file
@@ -138,6 +139,8 @@ def modal_get():
         print(f"Generating response to request {request_id}")
 
         image_url = body.get("image_url")
+        if not validators.url(image_url):
+            raise HTTPException(status_code=400, detail="Invalid image URL")
         # image_file = body.get("image_file")
 
         if image_url:
@@ -215,7 +218,6 @@ def main(
 
 
 # TODO:
-# - add input validation
 # - add file upload security
 # - add multiple uploads/urls
 # - add text prompt
