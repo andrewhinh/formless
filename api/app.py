@@ -63,7 +63,11 @@ def download_model():
 in_prod: bool = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
 SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if in_prod else ".env.dev")]
 IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
-    "vllm==0.6.2", "term-image==0.7.2", "python-fasthtml==0.6.10", "sqlite-utils==3.18"
+    "vllm==0.6.2",
+    "term-image==0.7.2",
+    "python-fasthtml==0.6.10",
+    "sqlite-utils==3.18",
+    "validators==0.34.0",
 ).run_function(
     download_model,
     secrets=SECRETS,
