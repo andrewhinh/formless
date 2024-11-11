@@ -6,6 +6,7 @@ import modal
 
 NAME = "formless"
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
+DEFAULT_QUESTION = "What is the content of this image?"
 
 # Modal
 CUDA_VERSION = "12.4.0"
