@@ -13,6 +13,7 @@ from PIL import ImageFile
 from utils import (
     DATA_VOLUME,
     DEFAULT_IMG_URL,
+    DEFAULT_QUESTION,
     GPU_IMAGE,
     MINUTES,
     NAME,
@@ -31,7 +32,6 @@ max_model_len = 8192
 max_num_seqs = 1
 enforce_eager = True
 
-question = "What is the content of this image?"
 temperature = 0.2
 max_tokens = 1024
 
@@ -142,18 +142,19 @@ def modal_get():
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        image_url = body.get("image_url")
+        image_url = body.get("image_url", DEFAULT_IMG_URL)
         if not validators.url(image_url):
             raise HTTPException(status_code=400, detail="Invalid image URL")
         # image_file = body.get("image_file")
-
         if image_url:
             response = requests.get(image_url, stream=True)
             response.raise_for_status()
             image = Image.open(response.raw).convert("RGB")
         # else:
         #     image = Image.open(image_file).convert("RGB")
-        prompt = f"<|image|><|begin_of_text|>{config['question']}"
+
+        question = body.get("question", DEFAULT_QUESTION)
+        prompt = f"<|image|><|begin_of_text|>{question}"
         stop_token_ids = None
 
         sampling_params = SamplingParams(
@@ -212,19 +213,26 @@ def main(
     assert response.ok, response.status_code
     api_key = response.json()
 
-    response = requests.post(modal_get.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": api_key})
+    response = requests.post(
+        modal_get.web_url,
+        json={"image_url": DEFAULT_IMG_URL, "question": DEFAULT_QUESTION},
+        headers={"X-API-Key": api_key},
+    )
     assert response.ok, response.status_code
 
     if twice:
         # second response is faster, because the Function is already running
-        response = requests.post(modal_get.web_url, json={"image_url": DEFAULT_IMG_URL}, headers={"X-API-Key": api_key})
+        response = requests.post(
+            modal_get.web_url,
+            json={"image_url": DEFAULT_IMG_URL, "question": DEFAULT_QUESTION},
+            headers={"X-API-Key": api_key},
+        )
         assert response.ok, response.status_code
 
 
 # TODO:
 # - add file upload security
 # - add multiple uploads/urls
-# - add text prompt
 
 # - Replace with custom model impl FT on hard images
 # - Add custom CUDA kernels for faster inference
