@@ -12,6 +12,7 @@ from typing_extensions import Annotated
 
 
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
+DEFAULT_QUESTION = "What is the content of this image?"
 API_URL = "https://andrewhinh--formless-api-modal-get-infer.modal.run"
 
 # Typer CLI
@@ -23,11 +24,13 @@ state = {"verbose": False}
 
 # Fns
 def run() -> None:
-    image_url = state["image_url"]
+    image_url, question = state["image_url"], state["question"]
     response = requests.post(f"{API_URL}/api-key")
     assert response.ok, response.status_code
     api_key = response.json()
-    response = requests.post(API_URL, json={"image_url": image_url}, headers={"X-API-Key": api_key})
+    response = requests.post(
+        API_URL, json={"image_url": image_url, "question": question}, headers={"X-API-Key": api_key}
+    )
     assert response.ok, response.status_code
     return response.json()
 
@@ -41,6 +44,9 @@ def main(
     image_url: Annotated[
         str, typer.Option("--image-url", "-i", help="Image URL", rich_help_panel="Inputs")
     ] = DEFAULT_IMG_URL,
+    question: Annotated[
+        str, typer.Option("--question", "-q", help="Question", rich_help_panel="Inputs")
+    ] = DEFAULT_QUESTION,
     verbose: Annotated[
         int, typer.Option("--verbose", "-v", count=True, help="Verbose mode", rich_help_panel="General")
     ] = 0,
@@ -52,6 +58,7 @@ def main(
         state.update(
             {
                 "image_url": image_url,
+                "question": question,
                 "verbose": verbose > 0,
             }
         )
@@ -64,6 +71,7 @@ def main(
                 file.write(response.content)
             terminal_image = from_file(image_path)
             terminal_image.draw()
+            print(f"[bold blue]{question}[/bold blue]")
 
         if state["verbose"]:
             print("[red]Press[/red] [blue]Ctrl+C[/blue] [red]to stop at any time.[/red]")
@@ -92,4 +100,4 @@ def main(
 
 
 # TODO:
-# - Add more CLI options
+# - add multiple uploads/urls
