@@ -12,6 +12,7 @@ from PIL import ImageFile
 
 from utils import (
     DATA_VOLUME,
+    DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
     GPU_IMAGE,
@@ -102,6 +103,8 @@ app = modal.App(name=APP_NAME)
 )
 @modal.asgi_app()
 def modal_get():
+    import io
+
     import requests
     import validators
     from fasthtml import common as fh
@@ -135,25 +138,24 @@ def modal_get():
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
     @f_app.post("/")
-    async def main(request: Request, api_key: bool = Security(verify_api_key)) -> str:
-        body = await request.json()
-
+    async def main(
+        image_url: str = DEFAULT_IMG_URL, question: str = DEFAULT_QUESTION, api_key: bool = Security(verify_api_key)
+    ) -> str:
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        image_url = body.get("image_url", DEFAULT_IMG_URL)
         if not validators.url(image_url):
             raise HTTPException(status_code=400, detail="Invalid image URL")
-        # image_file = body.get("image_file")
-        if image_url:
-            response = requests.get(image_url, stream=True)
-            response.raise_for_status()
-            image = Image.open(response.raw).convert("RGB")
-        # else:
-        #     image = Image.open(image_file).convert("RGB")
 
-        question = body.get("question", DEFAULT_QUESTION)
+        response = requests.get(image_url, stream=True)
+        response.raise_for_status()
+
+        try:
+            image = Image.open(response.raw).convert("RGB")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}") from e
+
         prompt = f"<|image|><|begin_of_text|>{question}"
         stop_token_ids = None
 
@@ -190,6 +192,54 @@ def modal_get():
 
         return generated_text
 
+    @f_app.post("/upload")
+    async def main_upload(
+        request: Request, question: str = DEFAULT_QUESTION, api_key: bool = Security(verify_api_key)
+    ) -> str:
+        start = time.monotonic_ns()
+        request_id = uuid4()
+        print(f"Generating response to request {request_id}")
+
+        image_data = await request.body()
+
+        try:
+            image = Image.open(io.BytesIO(image_data)).convert("RGB")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}") from e
+
+        prompt = f"<|image|><|begin_of_text|>{question}"
+        stop_token_ids = None
+
+        sampling_params = SamplingParams(
+            temperature=config["temperature"],
+            max_tokens=config["max_tokens"],
+            stop_token_ids=stop_token_ids,
+        )
+
+        inputs = {
+            "prompt": prompt,
+            "multi_modal_data": {"image": image},
+        }
+
+        outputs = llm.generate(inputs, sampling_params=sampling_params)
+        generated_text = outputs[0].outputs[0].text.strip()
+
+        # show the question, image, and response in the terminal for demonstration purposes
+        image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}.jpg")
+        image.save(image_path)
+        terminal_image = from_file(image_path)
+        terminal_image.draw()
+        print(
+            Colors.BOLD,
+            Colors.GREEN,
+            f"Response: {generated_text}",
+            Colors.END,
+            sep="",
+        )
+        print(f"request {request_id} completed in {round((time.monotonic_ns() - start) / 1e9, 2)} seconds")
+
+        return generated_text
+
     @f_app.post("/api-key")
     async def apikey() -> str:
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=None))
@@ -204,9 +254,7 @@ def modal_get():
 
 ## For testing
 @app.local_entrypoint()
-def main(
-    twice=True,
-):
+def main():
     import requests
 
     response = requests.post(f"{modal_get.web_url}/api-key")
@@ -220,18 +268,19 @@ def main(
     )
     assert response.ok, response.status_code
 
-    if twice:
-        # second response is faster, because the Function is already running
-        response = requests.post(
-            modal_get.web_url,
-            json={"image_url": DEFAULT_IMG_URL, "question": DEFAULT_QUESTION},
-            headers={"X-API-Key": api_key},
-        )
-        assert response.ok, response.status_code
+    response = requests.post(
+        f"{modal_get.web_url}/upload",
+        data=open(DEFAULT_IMG_PATH, "rb").read(),
+        headers={
+            "X-API-Key": api_key,
+            "Content-Type": "application/octet-stream",
+            "question": DEFAULT_QUESTION,
+        },
+    )
+    assert response.ok, response.status_code
 
 
 # TODO:
-# - add file upload security
 # - add multiple uploads/urls
 
 # - Replace with custom model impl FT on hard images

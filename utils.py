@@ -1,11 +1,12 @@
 import subprocess
 import warnings
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import modal
 
 NAME = "formless"
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
+DEFAULT_IMG_PATH = Path(__file__).parent / "api" / "golden-gate-bridge.jpg"
 DEFAULT_QUESTION = "What is the content of this image?"
 
 # Modal
