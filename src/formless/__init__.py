@@ -13,7 +13,7 @@ from typing_extensions import Annotated
 
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
 DEFAULT_QUESTION = "What is the content of this image?"
-API_URL = "https://andrewhinh--formless-api-modal-get-infer.modal.run"
+API_URL = "https://andrewhinh--formless-api-modal-get.modal.run"
 
 # Typer CLI
 app = typer.Typer(
@@ -24,13 +24,26 @@ state = {"verbose": False}
 
 # Fns
 def run() -> None:
-    image_url, question = state["image_url"], state["question"]
+    image_url, image_path, question = state["image_url"], state["image_path"], state["question"]
+
     response = requests.post(f"{API_URL}/api-key")
     assert response.ok, response.status_code
     api_key = response.json()
-    response = requests.post(
-        API_URL, json={"image_url": image_url, "question": question}, headers={"X-API-Key": api_key}
-    )
+
+    if image_url:
+        response = requests.post(
+            API_URL, json={"image_url": image_url, "question": question}, headers={"X-API-Key": api_key}
+        )
+    else:
+        response = requests.post(
+            f"{API_URL}/upload",
+            data=open(image_path, "rb").read(),
+            headers={
+                "X-API-Key": api_key,
+                "Content-Type": "application/octet-stream",
+                "question": question,
+            },
+        )
     assert response.ok, response.status_code
     return response.json()
 
@@ -44,6 +57,7 @@ def main(
     image_url: Annotated[
         str, typer.Option("--image-url", "-i", help="Image URL", rich_help_panel="Inputs")
     ] = DEFAULT_IMG_URL,
+    image_path: Annotated[str, typer.Option("--image-path", "-p", help="Image Path", rich_help_panel="Inputs")] = None,
     question: Annotated[
         str, typer.Option("--question", "-q", help="Question", rich_help_panel="Inputs")
     ] = DEFAULT_QUESTION,
@@ -58,17 +72,25 @@ def main(
         state.update(
             {
                 "image_url": image_url,
+                "image_path": image_path,
                 "question": question,
                 "verbose": verbose > 0,
             }
         )
 
         if state["verbose"]:
-            response = requests.get(image_url)
-            image_filename = image_url.split("/")[-1]
-            image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
-            with open(image_path, "wb") as file:
-                file.write(response.content)
+            if image_url and image_path:
+                raise ValueError("Cannot accept both image_url and image_path yet.")
+            elif image_url:
+                response = requests.get(image_url)
+                response.raise_for_status()
+                image_filename = image_url.split("/")[-1]
+                image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
+                with open(image_path, "wb") as file:
+                    file.write(response.content)
+            else:
+                if not os.path.isfile(image_path):
+                    raise ValueError("The provided image path is not valid.")
             terminal_image = from_file(image_path)
             terminal_image.draw()
             print(f"[bold blue]{question}[/bold blue]")
