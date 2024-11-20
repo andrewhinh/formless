@@ -175,6 +175,7 @@ def modal_get():
 
         # show the question, image, and response in the terminal for demonstration purposes
         response = requests.get(image_url)
+        response.raise_for_status()
         image_filename = image_url.split("/")[-1]
         image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
         with open(image_path, "wb") as file:
