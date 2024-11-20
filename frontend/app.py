@@ -85,6 +85,7 @@ def modal_get():  # noqa: C901
             request_at=str,
             image_url=str,
             image_file=str,
+            question=str,
             failed=bool,
             response=str,
             session_id=str,
@@ -166,16 +167,24 @@ def modal_get():  # noqa: C901
                         alt="Card image",
                         cls="w-80 object-contain",
                     ),
-                    fh.P(
-                        g.response,
-                        onclick="navigator.clipboard.writeText(this.innerText);",
-                        hx_post="/toast?message=Copied to clipboard!&type=success",
-                        hx_target="#toast-container",
-                        hx_swap="outerHTML",
-                        cls="text-blue-300 hover:text-blue-100 cursor-pointer",
-                        title="Click to copy",
+                    fh.Group(
+                        fh.P(
+                            g.question,
+                            cls="text-blue-300",
+                        ),
+                        fh.P(
+                            g.response,
+                            onclick="navigator.clipboard.writeText(this.innerText);",
+                            hx_post="/toast?message=Copied to clipboard!&type=success",
+                            hx_target="#toast-container",
+                            hx_swap="outerHTML",
+                            cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                            title="Click to copy",
+                        ),
+                        cls="flex flex-col gap-2",
                     ),
-                    cls="w-2/3 flex flex-col justify-center items-center gap-4",
+                    cls="w-2/3 flex gap-4",
+                    style="max-height: 50vh; overflow-y: auto;",
                     id=f"gen-{g.id}",
                 ),
             )
@@ -185,8 +194,16 @@ def modal_get():  # noqa: C901
                 alt="Card image",
                 cls="w-80 object-contain",
             ),
-            fh.P("Scanning image ..."),
-            cls="w-2/3 flex flex-col justify-center items-center gap-4",
+            fh.Group(
+                fh.P(
+                    g.question,
+                    cls="text-blue-300",
+                ),
+                fh.P("Scanning image ..."),
+                cls="flex flex-col gap-2",
+            ),
+            cls="w-2/3 flex gap-4",
+            style="max-height: 50vh;",
             id=f"gen-{g.id}",
             hx_get=f"/gens/{g.id}",
             hx_trigger="every 1s",
@@ -285,20 +302,23 @@ def modal_get():  # noqa: C901
                     href="/developer",
                     cls="text-lg text-blue-300 hover:text-blue-100 font-mono font-family:Consolas, Monaco, 'Lucida Console', 'Liberation Mono', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', 'Courier New'",
                 ),
-                fh.A(
-                    icon(si_github.svg),
-                    href="https://github.com/andrewhinh/formless",
-                    target="_blank",
+                fh.Div(
+                    fh.A(
+                        icon(si_github.svg),
+                        href="https://github.com/andrewhinh/formless",
+                        target="_blank",
+                    ),
+                    fh.A(
+                        icon(si_pypi.svg),
+                        href="https://pypi.org/project/formless/",
+                        target="_blank",
+                    ),
+                    cls="flex flex-row gap-4",
                 ),
-                fh.A(
-                    icon(si_pypi.svg),
-                    href="https://pypi.org/project/formless/",
-                    target="_blank",
-                ),
-                cls="flex flex-col items-end md:flex-row md:items-center gap-4 md:gap-8",
+                cls="flex flex-col items-end md:flex-row md:items-center gap-2 md:gap-8",
             ),
             cls="flex justify-between p-4",
-            style="max-height: 20vh;",
+            style="max-height: 10vh;",
         )
 
     def main_content(session):
@@ -313,11 +333,18 @@ def modal_get():  # noqa: C901
                         placeholder="Enter an image url",
                         cls="p-2",
                     ),
+                    fh.Input(
+                        id="new-question",
+                        name="question",
+                        placeholder="Specify format or question",
+                        cls="p-2",
+                    ),
                     fh.Button(
                         "Scan",
                         type="submit",
                         cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                     ),
+                    cls="flex flex-col gap-4 w-full",
                 ),
                 hx_post="/url",
                 target_id="gen-list",
@@ -352,11 +379,11 @@ def modal_get():  # noqa: C901
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
-                cls="flex flex-col justify-center items-center gap-4 overflow-auto",
-                style="max-height: 50vh;",
+                cls="flex flex-col justify-center items-center gap-4",
+                style="max-height: 50vh; overflow-y: auto;",
             ),
-            cls="flex flex-col justify-center items-center gap-8 p-8",
-            style="max-height: 60vh;",
+            cls="flex flex-col justify-center items-center gap-4 p-8",
+            style="max-height: 80vh;",
         )
 
     def developer_page(session):
@@ -387,13 +414,12 @@ def modal_get():  # noqa: C901
                 fh.Div(
                     *key_containers[::-1],
                     id="api-key-table",
-                    cls="overflow-auto",
-                    style="max-height: 45vh;",
+                    style="max-height: 50vh; overflow-y: auto;",
                 ),
                 cls="flex flex-col gap-4 text-sm md:text-lg w-2/3 border-slate-500 border-2",
             ),
             cls="flex flex-col justify-center items-center gap-4",
-            style="max-height: 60vh;",
+            style="max-height: 80vh;",
         )
 
     def toast_container():
@@ -412,7 +438,7 @@ def modal_get():  # noqa: C901
                 cls="flex flex-col text-right gap-0.5",
             ),
             cls="flex justify-between p-4 text-sm md:text-lg",
-            style="max-height: 20vh;",
+            style="max-height: 10vh;",
         )
 
     # background tasks (separate threads)
@@ -426,6 +452,7 @@ def modal_get():  # noqa: C901
             request = {"image_url": g.image_url}
         elif g.image_file:
             request = {"image_file": g.image_file}
+        request["question"] = g.question
 
         # TODO: uncomment for debugging
         # g.response = "temp"
@@ -542,7 +569,7 @@ def modal_get():  # noqa: C901
             ),
             id="balance",
             hx_get="/balance",
-            hx_trigger="every 1s",
+            hx_trigger="every 0.1s",
             hx_swap="outerHTML",
             cls="flex flex-col gap-0.5",
         )
@@ -557,15 +584,15 @@ def modal_get():  # noqa: C901
                 hx_post="/clear-gens",
                 target_id="gen-list",
                 hx_swap="innerHTML",
-                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full",
+                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if curr_gens
             else None,
             id="clear-gens-button-container",
             hx_get="/clear-gens-button",
-            hx_trigger="every 1s",
+            hx_trigger="every 0.1s",
             hx_swap="outerHTML",
-            cls="flex items-center justify-center w-full",
+            cls="flex items-center justify-center w-full h-full",
         )
 
     @f_app.get("/export-gens-button")
@@ -578,15 +605,15 @@ def modal_get():  # noqa: C901
                 hx_get="/export-gens",
                 hx_target="this",
                 hx_swap="none",
-                cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full",
+                cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
             if curr_gens
             else None,
             id="export-gens-button-container",
             hx_get="/export-gens-button",
-            hx_trigger="every 1s",
+            hx_trigger="every 0.1s",
             hx_swap="outerHTML",
-            cls="flex items-center justify-center w-full",
+            cls="flex items-center justify-center w-full h-full",
         )
 
     @f_app.get("/clear-keys-button")
@@ -599,15 +626,15 @@ def modal_get():  # noqa: C901
                 hx_post="/clear-keys",
                 target_id="api-key-table",
                 hx_swap="innerHTML",
-                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full",
+                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if curr_keys
             else None,
             id="clear-keys-button-container",
             hx_get="/clear-keys-button",
-            hx_trigger="every 1s",
+            hx_trigger="every 0.1s",
             hx_swap="outerHTML",
-            cls="flex items-center justify-center w-full",
+            cls="flex items-center justify-center w-full h-full",
         )
 
     @f_app.get("/export-keys-button")
@@ -620,20 +647,20 @@ def modal_get():  # noqa: C901
                 hx_get="/export-keys",
                 hx_target="this",
                 hx_swap="none",
-                cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full",
+                cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
             if curr_keys
             else None,
             id="export-keys-button-container",
             hx_get="/export-keys-button",
-            hx_trigger="every 1s",
+            hx_trigger="every 0.1s",
             hx_swap="outerHTML",
-            cls="flex items-center justify-center w-full",
+            cls="flex items-center justify-center w-full h-full",
         )
 
     ## generation route
     @f_app.post("/url")
-    def generate_from_url(session, image_url: str):
+    def generate_from_url(session, image_url: str, question: str):
         # validation
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -656,8 +683,11 @@ def modal_get():  # noqa: C901
         global_balance.update(curr_balance)
 
         # Clear input
-        clear_input = fh.Input(
+        clear_img_input = fh.Input(
             id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
+        )
+        clear_q_input = fh.Input(
+            id="new-question", name="question", placeholder="Specify format or question", hx_swap_oob="true"
         )
 
         # Generate as before
@@ -665,11 +695,12 @@ def modal_get():  # noqa: C901
             Generation(
                 request_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 image_url=image_url,
+                question=question,
                 session_id=session["session_id"],
             )
         )
         generate_and_save(session, g)
-        return generation_preview(g, session), clear_input
+        return generation_preview(g, session), clear_img_input, clear_q_input
 
     # @f_app.post("/upload")
     # async def generate_from_upload(session, file: fh.UploadFile):
@@ -782,9 +813,9 @@ def modal_get():  # noqa: C901
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["request_at", "image_url", "response", "failed"])  # g.image_file,
+        writer.writerow(["request_at", "image_url", "question", "response", "failed"])  # g.image_file,
         for g in curr_gens:
-            writer.writerow([g.request_at, g.image_url, g.response, g.failed])  # g.image_file,
+            writer.writerow([g.request_at, g.image_url, g.question, g.response, g.failed])  # g.image_file,
 
         output.seek(0)
         response = fh.Response(
@@ -885,8 +916,7 @@ def modal_get():  # noqa: C901
 # - fix file upload
 # - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
-# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
-# - add text prompt
 
+# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
 # - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
