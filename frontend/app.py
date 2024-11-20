@@ -67,6 +67,7 @@ def modal_get():  # noqa: C901
         ],
         live=os.getenv("LIVE", False),
         debug=os.getenv("DEBUG", False),
+        boost=True,
     )
     fh.setup_toasts(f_app)
 
@@ -183,7 +184,7 @@ def modal_get():  # noqa: C901
                         ),
                         cls="flex flex-col gap-2",
                     ),
-                    cls="w-2/3 flex gap-4",
+                    cls="w-full flex gap-4",
                     style="max-height: 50vh; overflow-y: auto;",
                     id=f"gen-{g.id}",
                 ),
@@ -202,7 +203,7 @@ def modal_get():  # noqa: C901
                 fh.P("Scanning image ..."),
                 cls="flex flex-col gap-2",
             ),
-            cls="w-2/3 flex gap-4",
+            cls="w-full flex gap-4",
             style="max-height: 50vh;",
             id=f"gen-{g.id}",
             hx_get=f"/gens/{g.id}",
@@ -379,7 +380,7 @@ def modal_get():  # noqa: C901
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
-                cls="flex flex-col justify-center items-center gap-4",
+                cls="flex flex-col justify-center items-center gap-4 w-2/3",
                 style="max-height: 50vh; overflow-y: auto;",
             ),
             cls="flex flex-col justify-center items-center gap-4 p-8",
@@ -605,6 +606,7 @@ def modal_get():  # noqa: C901
                 hx_get="/export-gens",
                 hx_target="this",
                 hx_swap="none",
+                hx_boost="false",
                 cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
             if curr_gens
@@ -647,6 +649,7 @@ def modal_get():  # noqa: C901
                 hx_get="/export-keys",
                 hx_target="this",
                 hx_swap="none",
+                hx_boost="false",
                 cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
             if curr_keys
