@@ -639,9 +639,10 @@ def modal_get():  # noqa: C901
             fh.Button(
                 "Clear all",
                 id="clear-gens",
-                hx_post="/clear-gens",
-                target_id="gen-list",
-                hx_swap="innerHTML",
+                hx_delete="/gens",
+                hx_target="body",
+                hx_push_url="true",
+                hx_confirm="Are you sure?",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if curr_gens
@@ -686,9 +687,10 @@ def modal_get():  # noqa: C901
             fh.Button(
                 "Clear all",
                 id="clear-keys",
-                hx_post="/clear-keys",
-                target_id="api-key-table",
-                hx_swap="innerHTML",
+                hx_delete="/keys",
+                hx_target="body",
+                hx_push_url="true",
+                hx_confirm="Are you sure?",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if curr_keys
@@ -858,20 +860,22 @@ def modal_get():  # noqa: C901
         return key_request_preview(k, session)
 
     ## clear gens
-    @f_app.post("/clear-gens")
+    @f_app.delete("/gens")
     def clear_all(session):
         ids = [g.id for g in gens(where=f"session_id == '{session['session_id']}'")]
         for id in ids:
             gens.delete(id)
-        return None
+        fh.add_toast(session, "Deleted generations.", "success")
+        return fh.RedirectResponse("/", status_code=303)
 
     ## clear keys
-    @f_app.post("/clear-keys")
+    @f_app.delete("/keys")
     def clear_keys(session):
         ids = [k.id for k in api_keys(where=f"session_id == '{session['session_id']}'")]
         for id in ids:
             api_keys.delete(id)
-        return None
+        fh.add_toast(session, "Deleted keys.", "success")
+        return fh.RedirectResponse("/developer", status_code=303)
 
     ## export gens to CSV
     @f_app.get("/export-gens")
@@ -984,7 +988,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - update delete methods: https://hypermedia.systems/htmx-patterns/#_a_second_step_deleting_contacts_with_http_delete
 # - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 #   - Only allow authorized users to upload files:
 #       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
@@ -997,3 +1000,7 @@ def modal_get():  # noqa: C901
 
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
+# - add gens/keys counts: https://hypermedia.systems/more-htmx-patterns/#_lazy_loading
+# - add granular delete: https://hypermedia.systems/more-htmx-patterns/#_inline_delete
+# - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
+# - add animations: https://hypermedia.systems/a-dynamic-archive-ui/#_smoothing_things_out_animations_in_htmx
