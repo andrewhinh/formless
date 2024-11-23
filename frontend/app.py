@@ -179,7 +179,7 @@ def modal_get():  # noqa: C901
                         alt="Card image",
                         cls="w-20 object-contain",
                     ),
-                    fh.Group(
+                    fh.Div(
                         fh.P(
                             g.question,
                             cls="text-blue-300",
@@ -206,7 +206,7 @@ def modal_get():  # noqa: C901
                 alt="Card image",
                 cls="w-20 object-contain",
             ),
-            fh.Group(
+            fh.Div(
                 fh.P(
                     g.question,
                     cls="text-blue-300",
@@ -239,7 +239,7 @@ def modal_get():  # noqa: C901
             short_key = obscured_key[:8] + "..."
 
             return (
-                fh.Group(
+                fh.Div(
                     fh.Div(
                         obscured_key,
                         onmouseover=(
@@ -290,7 +290,7 @@ def modal_get():  # noqa: C901
                     """
                 ),
             )
-        return fh.Group(
+        return fh.Div(
             fh.Div("Requesting new key ...", cls="w-2/3"),
             fh.Div("", cls="w-1/3"),
             id=f"key-{k.key}",
@@ -337,27 +337,13 @@ def modal_get():  # noqa: C901
         curr_gens = get_curr_gens(session)
         gen_containers = [generation_preview(g, session) for g in curr_gens]
         return fh.Main(
-            fh.Group(
-                fh.Group(
-                    fh.Button(
-                        "Image URL",
-                        id="set-gen-form-url",
-                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                        hx_post="/set-gen-form/image-url",
-                        hx_target="#gen-form",
-                        hx_swap="innerHTML",
-                    ),
-                    fh.Button(
-                        "File Upload",
-                        id="set-gen-form-upload",
-                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                        hx_post="/set-gen-form/image-upload",
-                        hx_target="#gen-form",
-                        hx_swap="innerHTML",
-                    ),
-                    cls="flex gap-4",
+            fh.Div(
+                fh.Div(
+                    get_gen_form_url_button(session),
+                    get_gen_form_upload_button(session),
+                    cls="w-full flex gap-4",
                 ),
-                set_gen_form("image-url", session),
+                get_gen_form("image-url", session),
                 cls="w-2/3 flex flex-col gap-8 justify-center items-center",
             ),
             fh.Div(
@@ -394,8 +380,8 @@ def modal_get():  # noqa: C901
                 get_export_keys_button(session),
                 cls="flex justify-center gap-4 w-2/3",
             ),
-            fh.Group(
-                fh.Group(
+            fh.Div(
+                fh.Div(
                     fh.Div("Key", cls="font-bold w-2/3"),
                     fh.Div("Granted At", cls="font-bold w-1/3"),
                     cls="flex",
@@ -546,34 +532,54 @@ def modal_get():  # noqa: C901
         )
 
     ## pending previews keeps polling routes until response is ready
-    @f_app.post("/set-gen-form/{view}")
-    def set_gen_form(view: str, session):
+    @f_app.get("/get-gen-form-url-button")
+    def get_gen_form_url_button(session):
+        curr_gen_form = session["gen_form"]
+        return fh.Div(
+            fh.Button(
+                "Image URL",
+                id="get-gen-form-url",
+                cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
+                if curr_gen_form == "image-url"
+                else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                hx_post="/get-gen-form/image-url",
+                hx_target="#gen-form",
+                hx_swap="innerHTML",
+            ),
+            id="get-gen-form-url-container",
+            hx_get="/get-gen-form-url-button",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex items-center justify-center w-full h-full",
+        )
+
+    @f_app.get("/get-gen-form-upload-button")
+    def get_gen_form_upload_button(session):
+        curr_gen_form = session["gen_form"]
+        return fh.Div(
+            fh.Button(
+                "Image Upload",
+                id="get-gen-form-upload",
+                cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
+                if curr_gen_form == "image-upload"
+                else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                hx_post="/get-gen-form/image-upload",
+                hx_target="#gen-form",
+                hx_swap="innerHTML",
+            ),
+            id="get-gen-form-upload-container",
+            hx_get="/get-gen-form-upload-button",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex items-center justify-center w-full h-full",
+        )
+
+    @f_app.post("/get-gen-form/{view}")
+    def get_gen_form(view: str, session):
         session["gen_form"] = view
-        url_button = fh.Button(
-            "Image URL",
-            id="set-gen-form-url",
-            cls="text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
-            if view == "image-url"
-            else "text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-            hx_post="/set-gen-form/image-url",
-            hx_target="#gen-form",
-            hx_swap="innerHTML",
-            hx_swap_oob="true",
-        )
-        upload_button = fh.Button(
-            "File Upload",
-            id="set-gen-form-upload",
-            cls="text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
-            if view == "image-upload"
-            else "text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-            hx_post="/set-gen-form/image-upload",
-            hx_target="#gen-form",
-            hx_swap="innerHTML",
-            hx_swap_oob="true",
-        )
         return (
             fh.Form(
-                fh.Group(
+                fh.Div(
                     fh.Input(
                         id="new-image-url",
                         name="image_url",  # passed to fn call for python syntax
@@ -601,7 +607,7 @@ def modal_get():  # noqa: C901
             )
             if view == "image-url"
             else fh.Form(
-                fh.Group(
+                fh.Div(
                     fh.Input(
                         id="new-image-upload",
                         name="image_file",
@@ -628,8 +634,6 @@ def modal_get():  # noqa: C901
                 id="gen-form",
                 cls="w-full h-full",
             ),
-            url_button,
-            upload_button,
         )
 
     @f_app.get("/clear-gens-button")
@@ -989,6 +993,6 @@ def modal_get():  # noqa: C901
 #   - Run the file through an antivirus or a sandbox if available to validate that it doesn't contain malicious data
 #   - Run the file through CDR (Content Disarm & Reconstruct) if applicable type (PDF, DOCX, etc...)
 #   - Protect the file upload from CSRF attacks: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
-# - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
+# - replace polling routes with SSE + oob: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
