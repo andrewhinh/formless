@@ -18,6 +18,8 @@ in_prod = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
 # Modal
 FE_IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
+    .apt_install("git")
+    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
     .pip_install(  # add Python dependencies
         "python-fasthtml==0.6.10",
         "simpleicons==7.21.0",
@@ -50,6 +52,7 @@ app = modal.App(APP_NAME)
 def modal_get():  # noqa: C901
     import csv
     import io
+    import subprocess
     import uuid
 
     import requests
@@ -809,14 +812,31 @@ def modal_get():  # noqa: C901
         # Limit img size
         max_size_mb = 5
         max_size_bytes = max_size_mb * 1024 * 1024
-        if len(await image_file.read()) > max_size_bytes:
+        filebuffer = await image_file.read()
+        if len(filebuffer) > max_size_bytes:
             fh.add_toast(session, f"File size exceeds {max_size_mb}MB limit.", "error")
             return None
 
         # Write file to disk
-        filebuffer = await image_file.read()
-        upload_path = upload_dir / str(uuid.uuid4())
+        upload_path = upload_dir / f"{uuid.uuid4()}{file_extension}"
         upload_path.write_bytes(filebuffer)
+
+        # Run antivirus
+        try:
+            result = subprocess.run(  # noqa: S603
+                ["python", "main.py", str(upload_path)],  # noqa: S607
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd="/Python-Antivirus",
+            )
+            scan_result = result.stdout.strip().lower()
+            if scan_result == "infected":
+                fh.add_toast(session, "Potential threat detected.", "error")
+                return None
+        except Exception as e:
+            fh.add_toast(session, f"Error during antivirus scan: {e}", "error")
+            return None
 
         # Warn if we're out of balance
         curr_balance = get_curr_balance()
@@ -992,12 +1012,12 @@ def modal_get():  # noqa: C901
 #   - Only allow authorized users to upload files:
 #       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 #       - add form validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
-#   - Run the file through an antivirus or a sandbox if available to validate that it doesn't contain malicious data
 #   - Run the file through CDR (Content Disarm & Reconstruct) if applicable type (PDF, DOCX, etc...)
 #   - Protect the file upload from CSRF attacks: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 # - replace polling routes with SSE + oob: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
 
+# - better url/file validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
 # - add gens/keys counts: https://hypermedia.systems/more-htmx-patterns/#_lazy_loading
