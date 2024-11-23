@@ -196,7 +196,7 @@ def modal_get():  # noqa: C901
                         cls="flex flex-col gap-2",
                     ),
                     cls="w-full flex gap-4",
-                    style="max-height: 50vh; overflow-y: auto;",
+                    style="max-height: 40vh; overflow-y: auto;",
                     id=f"gen-{g.id}",
                 ),
             )
@@ -215,7 +215,7 @@ def modal_get():  # noqa: C901
                 cls="flex flex-col gap-2",
             ),
             cls="w-full flex gap-4",
-            style="max-height: 50vh;",
+            style="max-height: 40vh;",
             id=f"gen-{g.id}",
             hx_get=f"/gens/{g.id}",
             hx_trigger="every 1s",
@@ -269,7 +269,7 @@ def modal_get():  # noqa: C901
                         cls="w-1/3",
                     ),
                     id=f"key-{k.id}",
-                    cls="flex",
+                    cls="flex p-2",
                 ),
                 fh.Script(
                     f"""
@@ -291,10 +291,10 @@ def modal_get():  # noqa: C901
                 ),
             )
         return fh.Div(
-            fh.Div("Requesting new key ...", cls="w-2/3"),
+            fh.Div("Requesting key ...", cls="w-2/3"),
             fh.Div("", cls="w-1/3"),
             id=f"key-{k.key}",
-            cls="flex",
+            cls="flex p-2",
             hx_get=f"/keys/{k.id}",
             hx_trigger="every 1s",
             hx_swap="outerHTML",
@@ -341,21 +341,21 @@ def modal_get():  # noqa: C901
                 fh.Div(
                     get_gen_form_url_button(session),
                     get_gen_form_upload_button(session),
-                    cls="w-full flex gap-4",
+                    cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
                 ),
                 get_gen_form("image-url", session),
-                cls="w-2/3 flex flex-col gap-8 justify-center items-center",
+                cls="w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
             fh.Div(
                 get_clear_gens_button(session),  # clear all button, hidden if no gens
                 get_export_gens_button(session),  # export to csv button, hidden if no gens
-                cls="flex justify-center gap-4 w-2/3",
+                cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-2/3",
             ),
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
-                cls="flex flex-col justify-center items-center gap-4 w-2/3",
-                style="max-height: 50vh; overflow-y: auto;",
+                cls="flex flex-col justify-center items-center gap-2 w-2/3",
+                style="max-height: 40vh; overflow-y: auto;",
             ),
             cls="flex flex-col justify-center items-center gap-4 p-8",
             style="max-height: 80vh;",
@@ -378,22 +378,22 @@ def modal_get():  # noqa: C901
             fh.Div(
                 get_clear_keys_button(session),
                 get_export_keys_button(session),
-                cls="flex justify-center gap-4 w-2/3",
+                cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
             ),
             fh.Div(
                 fh.Div(
                     fh.Div("Key", cls="font-bold w-2/3"),
                     fh.Div("Granted At", cls="font-bold w-1/3"),
-                    cls="flex",
+                    cls="flex p-2",
                 ),
                 fh.Div(
                     *key_containers[::-1],
                     id="api-key-table",
-                    style="max-height: 50vh; overflow-y: auto;",
+                    style="max-height: 40vh; overflow-y: auto;",
                 ),
-                cls="flex flex-col gap-4 text-sm md:text-lg w-2/3 border-slate-500 border-2",
+                cls="w-2/3 flex flex-col gap-2 text-sm md:text-lg border-slate-500 border-2",
             ),
-            cls="flex flex-col justify-center items-center gap-4",
+            cls="flex flex-col justify-center items-center gap-4 p-8",
             style="max-height: 80vh;",
         )
 
@@ -584,20 +584,18 @@ def modal_get():  # noqa: C901
                         id="new-image-url",
                         name="image_url",  # passed to fn call for python syntax
                         placeholder="Enter an image url",
-                        cls="p-2",
                     ),
                     fh.Input(
                         id="new-question",
                         name="question",
                         placeholder="Specify format or question",
-                        cls="p-2",
                     ),
                     fh.Button(
                         "Scan",
                         type="submit",
                         cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                     ),
-                    cls="flex flex-col gap-4",
+                    cls="flex flex-col md:gap-2",
                 ),
                 hx_post="/url",
                 target_id="gen-list",
@@ -613,13 +611,11 @@ def modal_get():  # noqa: C901
                         name="image_file",
                         type="file",
                         accept="image/*",
-                        cls="p-2",
                     ),
                     fh.Input(
                         id="new-question",
                         name="question",
                         placeholder="Specify format or question",
-                        cls="p-2",
                     ),
                     fh.Button(
                         "Scan",
@@ -776,10 +772,10 @@ def modal_get():  # noqa: C901
 
         # Clear input
         clear_img_input = fh.Input(
-            id="new-image-url", name="image_url", placeholder="Enter an image url", cls="p-2", hx_swap_oob="true"
+            id="new-image-url", name="image_url", placeholder="Enter an image url", hx_swap_oob="true"
         )
         clear_q_input = fh.Input(
-            id="new-question", name="question", placeholder="Specify format or question", cls="p-2", hx_swap_oob="true"
+            id="new-question", name="question", placeholder="Specify format or question", hx_swap_oob="true"
         )
 
         # Generate as before
@@ -832,10 +828,10 @@ def modal_get():  # noqa: C901
 
         # Clear input
         clear_img_input = fh.Input(
-            id="new-image-upload", name="image_file", type="file", accept="image/*", cls="p-2", hx_swap_oob="true"
+            id="new-image-upload", name="image_file", type="file", accept="image/*", hx_swap_oob="true"
         )
         clear_q_input = fh.Input(
-            id="new-question", name="question", cls="p-2", placeholder="Specify format or question", hx_swap_oob="true"
+            id="new-question", name="question", placeholder="Specify format or question", hx_swap_oob="true"
         )
 
         # Generate as before
@@ -988,11 +984,16 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
+# - update delete methods: https://hypermedia.systems/htmx-patterns/#_a_second_step_deleting_contacts_with_http_delete
 # - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
-#   - Only allow authorized users to upload files -> add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+#   - Only allow authorized users to upload files:
+#       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+#       - add form validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
 #   - Run the file through an antivirus or a sandbox if available to validate that it doesn't contain malicious data
 #   - Run the file through CDR (Content Disarm & Reconstruct) if applicable type (PDF, DOCX, etc...)
 #   - Protect the file upload from CSRF attacks: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 # - replace polling routes with SSE + oob: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
+
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
+# - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
