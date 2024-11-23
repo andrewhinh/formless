@@ -58,6 +58,7 @@ def modal_get():  # noqa: C901
     from fasthtml import common as fh
     from simpleicons.icons import si_github, si_pypi
 
+    # setup
     f_app, _ = fh.fast_app(
         ws_hdr=True,
         hdrs=[
@@ -71,7 +72,7 @@ def modal_get():  # noqa: C901
     )
     fh.setup_toasts(f_app)
 
-    # database
+    ## db
     upload_dir = Path(f"/{DATA_VOLUME}/uploads")
     upload_dir.mkdir(exist_ok=True)
     db_path = f"/{DATA_VOLUME}/main.db"
@@ -79,7 +80,7 @@ def modal_get():  # noqa: C901
     # os.remove(db_path)
     tables = fh.database(db_path).t
 
-    ## generations
+    ### generations
     gens = tables.gens
     if gens not in tables:
         gens.create(
@@ -100,13 +101,13 @@ def modal_get():  # noqa: C901
         curr_gens = [g for g in curr_gens if not g.failed]  # TODO: limitation of sqlite-utils
         return curr_gens
 
-    ## api keys
+    ### api keys
     api_keys = tables.api_keys
     if api_keys not in tables:
         api_keys.create(key=str, granted_at=str, session_id=str, id=int, pk="id")
     ApiKey = api_keys.dataclass()
 
-    ## global balance
+    ### global balance
     init_balance = 100
     global_balance = tables.global_balance
     if global_balance not in tables:
@@ -120,12 +121,14 @@ def modal_get():  # noqa: C901
             global_balance.insert(Balance(balance=init_balance))
             return global_balance.get(1)
 
-    # stripe
+    ## stripe
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
     webhook_secret = os.environ["STRIPE_WEBHOOK_SECRET"]
     DOMAIN: str = os.environ["DOMAIN"]
 
-    # components
+    # ui
+
+    ## components
     def icon(
         svg,
         width="35",
@@ -157,7 +160,15 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
-        image_src = g.image_url if g.image_url else g.image_file
+        image_src = None
+        if g.image_url:
+            image_src = g.image_url
+        elif g.image_file:
+            temp_path = parent_path / Path(g.image_file).name
+            with open(temp_path, "wb") as f:
+                f.write(open(g.image_file, "rb").read())
+            image_src = f"/{Path(g.image_file).name}"
+
         if g.failed:
             return None
         elif g.response:
@@ -166,7 +177,7 @@ def modal_get():  # noqa: C901
                     fh.Img(
                         src=image_src,
                         alt="Card image",
-                        cls="w-80 object-contain",
+                        cls="w-20 object-contain",
                     ),
                     fh.Group(
                         fh.P(
@@ -193,7 +204,7 @@ def modal_get():  # noqa: C901
             fh.Img(
                 src=image_src,
                 alt="Card image",
-                cls="w-80 object-contain",
+                cls="w-20 object-contain",
             ),
             fh.Group(
                 fh.P(
@@ -285,11 +296,11 @@ def modal_get():  # noqa: C901
             id=f"key-{k.key}",
             cls="flex",
             hx_get=f"/keys/{k.id}",
-            hx_trigger="every 0.1s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
         )
 
-    # layout
+    ## layout
     def nav():
         return fh.Nav(
             fh.A(
@@ -326,52 +337,29 @@ def modal_get():  # noqa: C901
         curr_gens = get_curr_gens(session)
         gen_containers = [generation_preview(g, session) for g in curr_gens]
         return fh.Main(
-            fh.Form(
+            fh.Group(
                 fh.Group(
-                    fh.Input(
-                        id="new-image-url",
-                        name="image_url",
-                        placeholder="Enter an image url",
-                        cls="p-2",
-                    ),
-                    fh.Input(
-                        id="new-question",
-                        name="question",
-                        placeholder="Specify format or question",
-                        cls="p-2",
+                    fh.Button(
+                        "Image URL",
+                        id="set-gen-form-url",
+                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                        hx_post="/set-gen-form/image-url",
+                        hx_target="#gen-form",
+                        hx_swap="innerHTML",
                     ),
                     fh.Button(
-                        "Scan",
-                        type="submit",
+                        "File Upload",
+                        id="set-gen-form-upload",
                         cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                        hx_post="/set-gen-form/image-upload",
+                        hx_target="#gen-form",
+                        hx_swap="innerHTML",
                     ),
-                    cls="flex flex-col gap-4 w-full",
+                    cls="flex gap-4",
                 ),
-                hx_post="/url",
-                target_id="gen-list",
-                hx_swap="afterbegin",
-                cls="w-2/3",
+                set_gen_form("image-url", session),
+                cls="w-2/3 flex flex-col gap-8 justify-center items-center",
             ),
-            # fh.P("or", cls="text-lg"),
-            # fh.Form(
-            #     fh.Group(
-            #         fh.Input(
-            #             id="new-file",
-            #             type="file",
-            #             name="file",
-            #             cls="p-2",
-            #         ),
-            #         fh.Button(
-            #             "Scan",
-            #             type="submit",
-            #             cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-            #         ),
-            #     ),
-            #     hx_post="/upload",
-            #     target_id="gen-list",
-            #     hx_swap="afterbegin",
-            #     cls="w-2/3",
-            # ),
             fh.Div(
                 get_clear_gens_button(session),  # clear all button, hidden if no gens
                 get_export_gens_button(session),  # export to csv button, hidden if no gens
@@ -450,17 +438,27 @@ def modal_get():  # noqa: C901
         generate_key_and_save(k)
 
         if g.image_url:
-            request = {"image_url": g.image_url}
+            response = requests.post(
+                os.getenv("API_URL"),
+                json={"image_url": g.image_url, "question": g.question},
+                headers={"X-API-Key": k.key},
+            )
         elif g.image_file:
-            request = {"image_file": g.image_file}
-        request["question"] = g.question
+            response = requests.post(
+                f"{os.getenv('API_URL')}/upload",
+                data=open(g.image_file, "rb").read(),
+                headers={
+                    "X-API-Key": k.key,
+                    "Content-Type": "application/octet-stream",
+                    "question": g.question,
+                },
+            )
 
         # TODO: uncomment for debugging
         # g.response = "temp"
         # gens.update(g)
         # return
 
-        response = requests.post(os.getenv("API_URL"), json=request, headers={"X-API-Key": k.key})
         # TODO: uncomment for debugging
         # response = requests.Response()
         # response.status_code = 500
@@ -498,6 +496,8 @@ def modal_get():  # noqa: C901
     async def home(session):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
+        if "gen_form" not in session:
+            session["gen_form"] = "image-url"
         return (
             fh.Title(NAME),
             fh.Div(
@@ -545,34 +545,91 @@ def modal_get():  # noqa: C901
             ),
         )
 
-    ## pending preview keeps polling this route until response is ready
-    @f_app.get("/gens/{id}")
-    def preview(id: int, session):
-        return generation_preview(gens.get(id), session)
-
-    ## likewise we poll to keep the key request updated
-    @f_app.get("/keys/{id}")
-    def key_request(id: int, session):
-        return key_request_preview(api_keys.get(id), session)
-
-    @f_app.get("/balance")
-    def get_balance():
-        curr_balance = get_curr_balance()
-        return fh.Div(
-            fh.Div(
-                fh.P("Global balance:"),
-                fh.P(f"{curr_balance.balance} credits", cls="font-bold"),
-                cls="flex items-start gap-0.5 md:gap-1",
+    ## pending previews keeps polling routes until response is ready
+    @f_app.post("/set-gen-form/{view}")
+    def set_gen_form(view: str, session):
+        session["gen_form"] = view
+        url_button = fh.Button(
+            "Image URL",
+            id="set-gen-form-url",
+            cls="text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
+            if view == "image-url"
+            else "text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+            hx_post="/set-gen-form/image-url",
+            hx_target="#gen-form",
+            hx_swap="innerHTML",
+            hx_swap_oob="true",
+        )
+        upload_button = fh.Button(
+            "File Upload",
+            id="set-gen-form-upload",
+            cls="text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
+            if view == "image-upload"
+            else "text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+            hx_post="/set-gen-form/image-upload",
+            hx_target="#gen-form",
+            hx_swap="innerHTML",
+            hx_swap_oob="true",
+        )
+        return (
+            fh.Form(
+                fh.Group(
+                    fh.Input(
+                        id="new-image-url",
+                        name="image_url",  # passed to fn call for python syntax
+                        placeholder="Enter an image url",
+                        cls="p-2",
+                    ),
+                    fh.Input(
+                        id="new-question",
+                        name="question",
+                        placeholder="Specify format or question",
+                        cls="p-2",
+                    ),
+                    fh.Button(
+                        "Scan",
+                        type="submit",
+                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                    ),
+                    cls="flex flex-col gap-4",
+                ),
+                hx_post="/url",
+                target_id="gen-list",
+                hx_swap="afterbegin",
+                id="gen-form",
+                cls="w-full h-full",
+            )
+            if view == "image-url"
+            else fh.Form(
+                fh.Group(
+                    fh.Input(
+                        id="new-image-upload",
+                        name="image_file",
+                        type="file",
+                        accept="image/*",
+                        cls="p-2",
+                    ),
+                    fh.Input(
+                        id="new-question",
+                        name="question",
+                        placeholder="Specify format or question",
+                        cls="p-2",
+                    ),
+                    fh.Button(
+                        "Scan",
+                        type="submit",
+                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                    ),
+                    cls="flex flex-col gap-4",
+                ),
+                hx_post="/upload",
+                target_id="gen-list",
+                hx_swap="afterbegin",
+                id="gen-form",
+                cls="w-full h-full",
             ),
-            fh.P(
-                fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
-                " to share ($1)",
-            ),
-            id="balance",
-            hx_get="/balance",
-            hx_trigger="every 0.1s",
-            hx_swap="outerHTML",
-            cls="flex flex-col gap-0.5",
+            url_button,
+            upload_button,
         )
 
     @f_app.get("/clear-gens-button")
@@ -591,7 +648,7 @@ def modal_get():  # noqa: C901
             else None,
             id="clear-gens-button-container",
             hx_get="/clear-gens-button",
-            hx_trigger="every 0.1s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
             cls="flex items-center justify-center w-full h-full",
         )
@@ -613,10 +670,14 @@ def modal_get():  # noqa: C901
             else None,
             id="export-gens-button-container",
             hx_get="/export-gens-button",
-            hx_trigger="every 0.1s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
             cls="flex items-center justify-center w-full h-full",
         )
+
+    @f_app.get("/gens/{id}")
+    def preview(id: int, session):
+        return generation_preview(gens.get(id), session)
 
     @f_app.get("/clear-keys-button")
     def get_clear_keys_button(session):
@@ -634,7 +695,7 @@ def modal_get():  # noqa: C901
             else None,
             id="clear-keys-button-container",
             hx_get="/clear-keys-button",
-            hx_trigger="every 0.1s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
             cls="flex items-center justify-center w-full h-full",
         )
@@ -656,9 +717,33 @@ def modal_get():  # noqa: C901
             else None,
             id="export-keys-button-container",
             hx_get="/export-keys-button",
-            hx_trigger="every 0.1s",
+            hx_trigger="every 1s",
             hx_swap="outerHTML",
             cls="flex items-center justify-center w-full h-full",
+        )
+
+    @f_app.get("/keys/{id}")
+    def key_request(id: int, session):
+        return key_request_preview(api_keys.get(id), session)
+
+    @f_app.get("/balance")
+    def get_balance():
+        curr_balance = get_curr_balance()
+        return fh.Div(
+            fh.Div(
+                fh.P("Global balance:"),
+                fh.P(f"{curr_balance.balance} credits", cls="font-bold"),
+                cls="flex items-start gap-0.5 md:gap-1",
+            ),
+            fh.P(
+                fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
+                " to share ($1)",
+            ),
+            id="balance",
+            hx_get="/balance",
+            hx_trigger="every 1s",
+            hx_swap="outerHTML",
+            cls="flex flex-col gap-0.5",
         )
 
     ## generation route
@@ -687,10 +772,10 @@ def modal_get():  # noqa: C901
 
         # Clear input
         clear_img_input = fh.Input(
-            id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
+            id="new-image-url", name="image_url", placeholder="Enter an image url", cls="p-2", hx_swap_oob="true"
         )
         clear_q_input = fh.Input(
-            id="new-question", name="question", placeholder="Specify format or question", hx_swap_oob="true"
+            id="new-question", name="question", placeholder="Specify format or question", cls="p-2", hx_swap_oob="true"
         )
 
         # Generate as before
@@ -705,57 +790,62 @@ def modal_get():  # noqa: C901
         generate_and_save(session, g)
         return generation_preview(g, session), clear_img_input, clear_q_input
 
-    # @f_app.post("/upload")
-    # async def generate_from_upload(session, file: fh.UploadFile):
-    #     # Check for session ID
-    #     if "session_id" not in session:
-    #         fh.add_toast(session, "Please refresh the page", "error")
-    #         return None
+    @f_app.post("/upload")
+    async def generate_from_upload(session, image_file: fh.UploadFile, question: str):
+        # Check for session ID
+        if "session_id" not in session:
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
 
-    #     # Write file to disk
-    #     filebuffer = await file.read()
-    #     upload_path = upload_dir / (str(uuid.uuid4()) + "_" + file.filename)
-    #     upload_path.write_bytes(filebuffer)
+        # Ensure extension is valid image
+        valid_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"}
+        file_extension = Path(image_file.filename).suffix.lower()
+        if file_extension not in valid_extensions:
+            fh.add_toast(session, "Invalid file type. Please upload an image.", "error")
+            return None
 
-    #     # Warn if we're out of balance
-    #     curr_balance = get_curr_balance()
-    #     if curr_balance.balance < 1:
-    #         fh.add_toast(session, "Out of balance!", "error")
-    #         return None
+        # Limit img size
+        max_size_mb = 5
+        max_size_bytes = max_size_mb * 1024 * 1024
+        if len(await image_file.read()) > max_size_bytes:
+            fh.add_toast(session, f"File size exceeds {max_size_mb}MB limit.", "error")
+            return None
 
-    #     # Decrement balance
-    #     curr_balance.balance -= 1
-    #     global_balance.update(curr_balance)
+        # Write file to disk
+        filebuffer = await image_file.read()
+        upload_path = upload_dir / str(uuid.uuid4())
+        upload_path.write_bytes(filebuffer)
 
-    #     # Clear input and button
-    #     clear_input = fh.Input(
-    #         id="new-image-url", name="image-url", placeholder="Enter an image url", hx_swap_oob="true"
-    #     )
-    #     clear_c_button = (
-    #         fh.Button(
-    #             "Clear all",
-    #             id="clear-gens",
-    #             hx_post="/clear-gens",
-    #             target_id="gen-list",
-    #             hx_swap="innerHTML",
-    #             hx_swap_oob="true",
-    #             cls="text-red-300 hover:text-red-100 p-2 w-1/3 border-red-300 border-2 hover:border-red-100",
-    #         ),
-    #     )
-    #     # clear_e_button = (
-    #     #     fh.Button(
-    #     #         "Export to CSV",
-    #     #         id="export-csv",
-    #     #         hx_get="/export",
-    #     #         cls="text-green-300 hover:text-green-100 p-2 w-1/3 border-green-300 border-2 hover:border-green-100",
-    #     #     ),
-    #     # )
+        # Warn if we're out of balance
+        curr_balance = get_curr_balance()
+        if curr_balance.balance < 1:
+            fh.add_toast(session, "Out of balance!", "error")
+            return None
 
-    #     # Generate as before
-    #     g = gens.insert(Generation(image_file=str(upload_path), session_id=session["session_id"]))
-    #     generate_and_save(g)
+        # Decrement balance
+        curr_balance.balance -= 1
+        global_balance.update(curr_balance)
 
-    #     return generation_preview(g, session), clear_input, clear_c_button  # , clear_e_button
+        # Clear input
+        clear_img_input = fh.Input(
+            id="new-image-upload", name="image_file", type="file", accept="image/*", cls="p-2", hx_swap_oob="true"
+        )
+        clear_q_input = fh.Input(
+            id="new-question", name="question", cls="p-2", placeholder="Specify format or question", hx_swap_oob="true"
+        )
+
+        # Generate as before
+        g = gens.insert(
+            Generation(
+                request_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                image_file=str(upload_path),
+                question=question,
+                session_id=session["session_id"],
+            )
+        )
+        generate_and_save(session, g)
+
+        return generation_preview(g, session), clear_img_input, clear_q_input
 
     ## api key request
     @f_app.post("/request-key")
@@ -763,21 +853,9 @@ def modal_get():  # noqa: C901
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-
-        clear_button = (
-            fh.Button(
-                "Clear all",
-                id="clear-keys",
-                hx_post="/clear-keys",
-                target_id="api-key-table",
-                hx_swap="innerHTML",
-                hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100",
-            ),
-        )
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=session["session_id"]))
         generate_key_and_save(k)
-        return key_request_preview(k, session), clear_button
+        return key_request_preview(k, session)
 
     ## clear gens
     @f_app.post("/clear-gens")
@@ -793,18 +871,7 @@ def modal_get():  # noqa: C901
         ids = [k.id for k in api_keys(where=f"session_id == '{session['session_id']}'")]
         for id in ids:
             api_keys.delete(id)
-        clear_button = (
-            fh.Button(
-                "Clear all",
-                id="clear-keys",
-                hx_post="/clear-keys",
-                target_id="api-key-table",
-                hx_swap="innerHTML",
-                hx_swap_oob="true",
-                cls="text-red-300 hover:text-red-100 p-2 w-full md:w-1/3 border-red-300 border-2 hover:border-red-100 hidden",
-            ),
-        )
-        return None, clear_button
+        return None
 
     ## export gens to CSV
     @f_app.get("/export-gens")
@@ -816,9 +883,9 @@ def modal_get():  # noqa: C901
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["request_at", "image_url", "question", "response", "failed"])  # g.image_file,
+        writer.writerow(["request_at", "image_url", "image_file", "question", "response", "failed"])
         for g in curr_gens:
-            writer.writerow([g.request_at, g.image_url, g.question, g.response, g.failed])  # g.image_file,
+            writer.writerow([g.request_at, g.image_url, Path(g.image_file).name, g.question, g.response, g.failed])
 
         output.seek(0)
         response = fh.Response(
@@ -846,7 +913,8 @@ def modal_get():  # noqa: C901
         )
         return response
 
-    ## send the user here to buy credits
+    ## stripe
+    ### send the user here to buy credits
     @f_app.get("/buy_global")
     def buy_credits(session):
         if "session_id" not in session:
@@ -873,17 +941,17 @@ def modal_get():  # noqa: C901
         ### send the USER to STRIPE
         return fh.RedirectResponse(s["url"])
 
-    ## STRIPE sends the USER here after a payment was canceled.
+    ### STRIPE sends the USER here after a payment was canceled.
     @f_app.get("/cancel")
     def cancel():
         return fh.RedirectResponse("/")
 
-    ## STRIPE sends the USER here after a payment was 'successful'.
+    ### STRIPE sends the USER here after a payment was 'successful'.
     @f_app.get("/success")
     def success():
         return fh.RedirectResponse("/")
 
-    ## STRIPE calls this to tell APP when a payment was completed.
+    ### STRIPE calls this to tell APP when a payment was completed.
     @f_app.post("/webhook")
     async def stripe_webhook(request):
         # print(request)
@@ -916,10 +984,11 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - fix file upload
-# - add file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
-# - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
-
-# - add user authentication: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#authentication-and-authorization
+# - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+#   - Only allow authorized users to upload files -> add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+#   - Run the file through an antivirus or a sandbox if available to validate that it doesn't contain malicious data
+#   - Run the file through CDR (Content Disarm & Reconstruct) if applicable type (PDF, DOCX, etc...)
+#   - Protect the file upload from CSRF attacks: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 # - replace polling routes with SSE: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
+# - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
