@@ -27,6 +27,7 @@ FE_IMAGE = (
         "sqlite-utils==3.18",
         "stripe==11.1.0",
         "validators==0.34.0",
+        "pillow==11.0.0",
     )
     .copy_local_dir(parent_path, "/root/")
 )
@@ -59,6 +60,7 @@ def modal_get():  # noqa: C901
     import stripe
     import validators
     from fasthtml import common as fh
+    from PIL import Image
     from simpleicons.icons import si_github, si_pypi
 
     # setup
@@ -809,17 +811,34 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "Invalid file type. Please upload an image.", "error")
             return None
 
-        # Limit img size
-        max_size_mb = 5
-        max_size_bytes = max_size_mb * 1024 * 1024
-        filebuffer = await image_file.read()
-        if len(filebuffer) > max_size_bytes:
-            fh.add_toast(session, f"File size exceeds {max_size_mb}MB limit.", "error")
-            return None
-
         # Write file to disk
+        filebuffer = await image_file.read()
         upload_path = upload_dir / f"{uuid.uuid4()}{file_extension}"
         upload_path.write_bytes(filebuffer)
+
+        # Verify MIME type and magic #
+        img = Image.open(upload_path)
+        try:
+            img.verify()
+        except Exception as e:
+            fh.add_toast(session, f"Error: {e}", "error")
+            os.remove(upload_path)
+            return None
+
+        # Limit img size
+        MAX_FILE_SIZE_MB = 5
+        MAX_DIMENSIONS = (4096, 4096)
+        if os.path.getsize(upload_path) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            fh.add_toast(session, f"File size exceeds {MAX_FILE_SIZE_MB}MB limit.", "error")
+            os.remove(upload_path)
+            return None
+        with Image.open(upload_path) as img:
+            if img.size[0] > MAX_DIMENSIONS[0] or img.size[1] > MAX_DIMENSIONS[1]:
+                fh.add_toast(
+                    session, f"Image dimensions exceed {MAX_DIMENSIONS[0]}x{MAX_DIMENSIONS[1]} pixels limit.", "error"
+                )
+                os.remove(upload_path)
+                return None
 
         # Run antivirus
         try:
@@ -833,9 +852,11 @@ def modal_get():  # noqa: C901
             scan_result = result.stdout.strip().lower()
             if scan_result == "infected":
                 fh.add_toast(session, "Potential threat detected.", "error")
+                os.remove(upload_path)
                 return None
         except Exception as e:
             fh.add_toast(session, f"Error during antivirus scan: {e}", "error")
+            os.remove(upload_path)
             return None
 
         # Warn if we're out of balance
@@ -1012,7 +1033,6 @@ def modal_get():  # noqa: C901
 #   - Only allow authorized users to upload files:
 #       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 #       - add form validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
-#   - Run the file through CDR (Content Disarm & Reconstruct) if applicable type (PDF, DOCX, etc...)
 #   - Protect the file upload from CSRF attacks: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 # - replace polling routes with SSE + oob: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
