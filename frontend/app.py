@@ -63,6 +63,7 @@ def modal_get():  # noqa: C901
     from fasthtml import common as fh
     from PIL import Image
     from simpleicons.icons import si_github, si_pypi
+    from starlette.middleware.cors import CORSMiddleware
 
     # setup
     f_app, _ = fh.fast_app(
@@ -77,6 +78,13 @@ def modal_get():  # noqa: C901
         boost=True,
     )
     fh.setup_toasts(f_app)
+    f_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["/"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     ## db
     upload_dir = Path(f"/{DATA_VOLUME}/uploads")
@@ -471,29 +479,6 @@ def modal_get():  # noqa: C901
         api_keys.update(k)
 
     # routes
-    ## middleware
-    @f_app.middleware("http")
-    async def cors_middleware(request, call_next):
-        response = await call_next(request)
-        allowed_origins = ["/"]
-        origin = request.headers.get("Origin")
-        if origin in allowed_origins:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        else:
-            response.headers["Access-Control-Allow-Origin"] = "null"  # Deny by default
-        return response
-
-    @f_app.middleware("http")
-    async def csrf_protection_middleware(request, call_next):
-        if request.method in ["POST", "DELETE"]:
-            form_data = await request.form()
-            csrf_token = form_data.get("csrf_token")
-            if not csrf_token or csrf_token != request.session.get("csrf_token"):
-                return fh.Response("Invalid CSRF token", status_code=403)
-        return await call_next(request)
-
     ## for images, CSS, etc.
     @f_app.get("/{fname:path}.{ext:static}")
     async def static_files(fname: str, ext: str):
@@ -614,7 +599,6 @@ def modal_get():  # noqa: C901
         return (
             fh.Form(
                 fh.Div(
-                    fh.Input(type="hidden", name="csrf_token", value=session["csrf_token"]),
                     fh.Input(
                         id="new-image-url",
                         name="image_url",  # passed to fn call for python syntax
@@ -641,7 +625,6 @@ def modal_get():  # noqa: C901
             if view == "image-url"
             else fh.Form(
                 fh.Div(
-                    fh.Input(type="hidden", name="csrf_token", value=session["csrf_token"]),
                     fh.Input(
                         id="new-image-upload",
                         name="image_file",
@@ -836,9 +819,7 @@ def modal_get():  # noqa: C901
             return None
 
         # Validate CSRF token
-        form_data = await session.request.form()
-        csrf_token = form_data.get("csrf_token")
-        if not csrf_token or csrf_token != session.get("csrf_token"):
+        if "csrf_token" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
@@ -1071,7 +1052,6 @@ def modal_get():  # noqa: C901
 #   - Only allow authorized users to upload files:
 #       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 #       - add form validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
-#   - Protect the file upload from CSRF attacks: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 # - replace polling routes with SSE + oob: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#server-sent-events-sse
 # - add smooth db migrations: prob switch to sqlmodel + alembic
 
