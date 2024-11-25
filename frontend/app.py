@@ -53,6 +53,7 @@ app = modal.App(APP_NAME)
 def modal_get():  # noqa: C901
     import csv
     import io
+    import secrets
     import subprocess
     import uuid
 
@@ -80,6 +81,7 @@ def modal_get():  # noqa: C901
     ## db
     upload_dir = Path(f"/{DATA_VOLUME}/uploads")
     upload_dir.mkdir(exist_ok=True)
+    os.chmod(upload_dir, 0o600)  # Read/write by owner only
     db_path = f"/{DATA_VOLUME}/main.db"
     # TODO: uncomment for debugging
     # os.remove(db_path)
@@ -469,6 +471,29 @@ def modal_get():  # noqa: C901
         api_keys.update(k)
 
     # routes
+    ## middleware
+    @f_app.middleware("http")
+    async def cors_middleware(request, call_next):
+        response = await call_next(request)
+        allowed_origins = ["/"]
+        origin = request.headers.get("Origin")
+        if origin in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        else:
+            response.headers["Access-Control-Allow-Origin"] = "null"  # Deny by default
+        return response
+
+    @f_app.middleware("http")
+    async def csrf_protection_middleware(request, call_next):
+        if request.method in ["POST", "DELETE"]:
+            form_data = await request.form()
+            csrf_token = form_data.get("csrf_token")
+            if not csrf_token or csrf_token != request.session.get("csrf_token"):
+                return fh.Response("Invalid CSRF token", status_code=403)
+        return await call_next(request)
+
     ## for images, CSS, etc.
     @f_app.get("/{fname:path}.{ext:static}")
     async def static_files(fname: str, ext: str):
@@ -487,6 +512,8 @@ def modal_get():  # noqa: C901
     async def home(session):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
+        if "csrf_token" not in session:
+            session["csrf_token"] = secrets.token_hex(32)
         if "gen_form" not in session:
             session["gen_form"] = "image-url"
         return (
@@ -515,6 +542,8 @@ def modal_get():  # noqa: C901
     def developer(session):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
+        if "csrf_token" not in session:
+            session["csrf_token"] = secrets.token_hex(32)
         return (
             fh.Title(NAME + " | " + "developer"),
             fh.Div(
@@ -585,6 +614,7 @@ def modal_get():  # noqa: C901
         return (
             fh.Form(
                 fh.Div(
+                    fh.Input(type="hidden", name="csrf_token", value=session["csrf_token"]),
                     fh.Input(
                         id="new-image-url",
                         name="image_url",  # passed to fn call for python syntax
@@ -611,6 +641,7 @@ def modal_get():  # noqa: C901
             if view == "image-url"
             else fh.Form(
                 fh.Div(
+                    fh.Input(type="hidden", name="csrf_token", value=session["csrf_token"]),
                     fh.Input(
                         id="new-image-upload",
                         name="image_file",
@@ -801,6 +832,13 @@ def modal_get():  # noqa: C901
     async def generate_from_upload(session, image_file: fh.UploadFile, question: str):
         # Check for session ID
         if "session_id" not in session:
+            fh.add_toast(session, "Please refresh the page", "error")
+            return None
+
+        # Validate CSRF token
+        form_data = await session.request.form()
+        csrf_token = form_data.get("csrf_token")
+        if not csrf_token or csrf_token != session.get("csrf_token"):
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
