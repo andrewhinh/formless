@@ -56,6 +56,7 @@ def modal_get():  # noqa: C901
     import secrets
     import subprocess
     import uuid
+    from asyncio import sleep
 
     import requests
     import stripe
@@ -72,6 +73,7 @@ def modal_get():  # noqa: C901
             fh.Script(src="https://cdn.tailwindcss.com"),
             fh.HighlightJS(langs=["python", "javascript", "html", "css"]),
             fh.Link(rel="icon", href="/favicon.ico", type="image/x-icon"),
+            fh.Script(src="https://unpkg.com/htmx-ext-sse@2.2.1/sse.js"),
         ],
         live=os.getenv("LIVE", False),
         debug=os.getenv("DEBUG", False),
@@ -161,8 +163,7 @@ def modal_get():  # noqa: C901
             cls=cls,
         )
 
-    ## preview while waiting for response
-    def generation_preview(g, session):
+    def gen_view(g, session, loading=True):
         ### check if g and session are valid
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -184,58 +185,57 @@ def modal_get():  # noqa: C901
                 f.write(open(g.image_file, "rb").read())
             image_src = f"/{Path(g.image_file).name}"
 
-        if g.failed:
-            return None
-        elif g.response:
-            return (
-                fh.Card(
-                    fh.Img(
-                        src=image_src,
-                        alt="Card image",
-                        cls="w-20 object-contain",
-                    ),
-                    fh.Div(
-                        fh.P(
-                            g.question,
-                            cls="text-blue-300",
-                        ),
-                        fh.P(
-                            g.response,
-                            onclick="navigator.clipboard.writeText(this.innerText);",
-                            hx_post="/toast?message=Copied to clipboard!&type=success",
-                            hx_target="#toast-container",
-                            hx_swap="outerHTML",
-                            cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
-                            title="Click to copy",
-                        ),
-                        cls="flex flex-col gap-2",
-                    ),
-                    cls="w-full flex gap-4",
-                    style="max-height: 40vh; overflow-y: auto;",
-                    id=f"gen-{g.id}",
+        if loading:
+            return fh.Card(
+                fh.Img(
+                    src=image_src,
+                    alt="Card image",
+                    cls="w-20 object-contain",
                 ),
+                fh.Div(
+                    fh.P(
+                        g.question,
+                        cls="text-blue-300",
+                    ),
+                    fh.P("Scanning image ..."),
+                    cls="flex flex-col gap-2",
+                ),
+                cls="w-full flex gap-4",
+                style="max-height: 40vh;",
+                id=f"gen-{g.id}",
             )
-        return fh.Card(
-            fh.Img(
-                src=image_src,
-                alt="Card image",
-                cls="w-20 object-contain",
-            ),
-            fh.Div(
-                fh.P(
-                    g.question,
-                    cls="text-blue-300",
-                ),
-                fh.P("Scanning image ..."),
-                cls="flex flex-col gap-2",
-            ),
-            cls="w-full flex gap-4",
-            style="max-height: 40vh;",
-            id=f"gen-{g.id}",
-            hx_get=f"/gens/{g.id}",
-            hx_trigger="every 1s",
-            hx_swap="outerHTML",
-        )
+        else:
+            if g.failed:
+                return None
+            elif g.response:
+                return (
+                    fh.Card(
+                        fh.Img(
+                            src=image_src,
+                            alt="Card image",
+                            cls="w-20 object-contain",
+                        ),
+                        fh.Div(
+                            fh.P(
+                                g.question,
+                                cls="text-blue-300",
+                            ),
+                            fh.P(
+                                g.response,
+                                onclick="navigator.clipboard.writeText(this.innerText);",
+                                hx_post="/toast?message=Copied to clipboard!&type=success",
+                                hx_target="#toast-container",
+                                hx_swap="outerHTML",
+                                cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                                title="Click to copy",
+                            ),
+                            cls="flex flex-col gap-2",
+                        ),
+                        cls="w-full flex gap-4",
+                        style="max-height: 40vh; overflow-y: auto;",
+                        id=f"gen-{g.id}",
+                    ),
+                )
 
     def key_request_preview(k, session):
         if "session_id" not in session:
@@ -350,7 +350,7 @@ def modal_get():  # noqa: C901
 
     def main_content(session):
         curr_gens = get_curr_gens(session)
-        gen_containers = [generation_preview(g, session) for g in curr_gens]
+        gen_containers = [gen_view(g, session) for g in curr_gens]
         return fh.Main(
             fh.Div(
                 fh.Div(
@@ -371,6 +371,10 @@ def modal_get():  # noqa: C901
                 id="gen-list",
                 cls="flex flex-col justify-center items-center gap-2 w-2/3",
                 style="max-height: 40vh; overflow-y: auto;",
+                hx_ext="sse",
+                sse_connect="/stream-gens",
+                hx_swap="innerHTML",
+                sse_swap="message",
             ),
             cls="flex flex-col justify-center items-center gap-4 p-8",
             style="max-height: 80vh;",
@@ -477,6 +481,27 @@ def modal_get():  # noqa: C901
         k.key = str(uuid.uuid4())
         k.granted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         api_keys.update(k)
+
+    # SSE
+    shutdown_event = fh.signal_shutdown()
+    sent_generations = set()  # Keeps track of sent generation IDs
+
+    async def stream_gen_updates(session):
+        while not shutdown_event.is_set():
+            gens = get_curr_gens(session)
+            if gens:
+                for g in gens:
+                    if g.id not in sent_generations:
+                        if g.response or g.failed:
+                            sent_generations.add(g.id)
+                            yield fh.sse_message(gen_view(g, session, False))
+                        else:
+                            yield fh.sse_message(gen_view(g, session))
+            await sleep(1)
+
+    @f_app.get("/stream-gens")
+    async def stream_gens(session):
+        return fh.EventStream(stream_gen_updates(session))
 
     # routes
     ## for images, CSS, etc.
@@ -695,10 +720,6 @@ def modal_get():  # noqa: C901
             cls="flex items-center justify-center w-full h-full",
         )
 
-    @f_app.get("/gens/{id}")
-    def preview(id: int, session):
-        return generation_preview(gens.get(id), session)
-
     @f_app.get("/clear-keys-button")
     def get_clear_keys_button(session):
         curr_keys = api_keys(where=f"session_id == '{session['session_id']}'")
@@ -809,7 +830,7 @@ def modal_get():  # noqa: C901
             )
         )
         generate_and_save(session, g)
-        return generation_preview(g, session), clear_img_input, clear_q_input
+        return gen_view(g, session), clear_img_input, clear_q_input
 
     @f_app.post("/upload")
     async def generate_from_upload(session, image_file: fh.UploadFile, question: str):
@@ -907,7 +928,7 @@ def modal_get():  # noqa: C901
         )
         generate_and_save(session, g)
 
-        return generation_preview(g, session), clear_img_input, clear_q_input
+        return gen_view(g, session), clear_img_input, clear_q_input
 
     ## api key request
     @f_app.post("/request-key")
