@@ -150,24 +150,10 @@ def modal_get():  # noqa: C901
     ## SSE state
     shutdown_event = fh.signal_shutdown()
     shown_generations = {}
-    shown_keys = {}
-
     global shown_balance
-    global shown_gen_form
-    global shown_clear_gens
-    global shown_export_gens
-    global shown_clear_keys
-    global shown_export_keys
-
     shown_balance = 0
-    shown_gen_form = "image-url"
-    shown_clear_gens = False
-    shown_export_gens = False
-    shown_clear_keys = False
-    shown_export_keys = False
 
     # ui
-
     ## components
     def icon(
         svg,
@@ -231,33 +217,31 @@ def modal_get():  # noqa: C901
                 id=f"gen-{g.id}",
             )
         elif g.response:
-            return (
-                fh.Card(
-                    fh.Img(
-                        src=image_src,
-                        alt="Card image",
-                        cls="w-20 object-contain",
-                    ),
-                    fh.Div(
-                        fh.P(
-                            g.question,
-                            cls="text-blue-300",
-                        ),
-                        fh.P(
-                            g.response,
-                            onclick="navigator.clipboard.writeText(this.innerText);",
-                            hx_post="/toast?message=Copied to clipboard!&type=success",
-                            hx_target="#toast-container",
-                            hx_swap="outerHTML",
-                            cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
-                            title="Click to copy",
-                        ),
-                        cls="flex flex-col gap-2",
-                    ),
-                    cls="w-full flex gap-4",
-                    style="max-height: 40vh; overflow-y: auto;",
-                    id=f"gen-{g.id}",
+            return fh.Card(
+                fh.Img(
+                    src=image_src,
+                    alt="Card image",
+                    cls="w-20 object-contain",
                 ),
+                fh.Div(
+                    fh.P(
+                        g.question,
+                        cls="text-blue-300",
+                    ),
+                    fh.P(
+                        g.response,
+                        onclick="navigator.clipboard.writeText(this.innerText);",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                        title="Click to copy",
+                    ),
+                    cls="flex flex-col gap-2",
+                ),
+                cls="w-full flex gap-4",
+                style="max-height: 40vh; overflow-y: auto;",
+                id=f"gen-{g.id}",
             )
         return fh.Card(
             fh.Img(
@@ -359,37 +343,37 @@ def modal_get():  # noqa: C901
             fh.P(f"{balance} credits", cls="font-bold"),
         )
 
-    def gen_form_url_button(gen_form):
-        return (
+    def gen_form_toggle(gen_form, hx_swap_oob="false"):
+        return fh.Div(
             fh.Button(
                 "Image URL",
-                id="get-gen-form-url",
+                id="gen-form-toggle-url",
                 cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
                 if gen_form == "image-url"
                 else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                hx_post="/get-gen-form/image-url",
+                hx_get="/get-gen-form/image-url",
                 hx_target="#gen-form",
                 hx_swap="innerHTML",
             ),
+            fh.Button(
+                "Image Upload",
+                id="gen-form-toggle-upload",
+                cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
+                if gen_form == "image-upload"
+                else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                hx_get="/get-gen-form/image-upload",
+                hx_target="#gen-form",
+                hx_swap="innerHTML",
+            ),
+            id="gen-form-toggle",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
         )
 
-    def gen_form_upload_button(gen_form):
-        return fh.Button(
-            "Image Upload",
-            id="get-gen-form-upload",
-            cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
-            if gen_form == "image-upload"
-            else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-            hx_post="/get-gen-form/image-upload",
-            hx_target="#gen-form",
-            hx_swap="innerHTML",
-        )
-
-    def clear_gens_button(curr_gens):
-        return (
+    def gen_manage(curr_gens, hx_swap_oob="false"):
+        return fh.Div(
             fh.Button(
                 "Clear all",
-                id="clear-gens",
                 hx_delete="/gens",
                 hx_target="body",
                 hx_push_url="true",
@@ -397,14 +381,9 @@ def modal_get():  # noqa: C901
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if curr_gens
-            else None
-        )
-
-    def export_gens_button(curr_gens):
-        return fh.Div(
+            else None,
             fh.Button(
                 "Export to CSV",
-                id="export-gens-csv",
                 hx_get="/export-gens",
                 hx_target="this",
                 hx_swap="none",
@@ -413,19 +392,15 @@ def modal_get():  # noqa: C901
             )
             if curr_gens
             else None,
-            id="export-gens-button-container",
-            hx_ext="sse",
-            sse_connect="/stream-export-gens-button",
-            hx_swap="innerHTML",
-            sse_swap="message",
-            cls="flex items-center justify-center w-full h-full",
+            id="gen-manage",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-2/3",
         )
 
-    def clear_keys_button(curr_keys):
-        return (
+    def key_manage(curr_keys, hx_swap_oob="false"):
+        return fh.Div(
             fh.Button(
                 "Clear all",
-                id="clear-keys",
                 hx_delete="/keys",
                 hx_target="body",
                 hx_push_url="true",
@@ -433,14 +408,9 @@ def modal_get():  # noqa: C901
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if curr_keys
-            else None
-        )
-
-    def export_keys_button(curr_keys):
-        return (
+            else None,
             fh.Button(
                 "Export to CSV",
-                id="export-keys-csv",
                 hx_get="/export-keys",
                 hx_target="this",
                 hx_swap="none",
@@ -448,7 +418,10 @@ def modal_get():  # noqa: C901
                 cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
             if curr_keys
-            else None
+            else None,
+            id="key-manage",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
         )
 
     ## layout
@@ -485,56 +458,22 @@ def modal_get():  # noqa: C901
         )
 
     def main_content(session):
-        curr_gens = get_curr_gens(session)
         curr_gen_form = session["gen_form"]
+        curr_gens = get_curr_gens(session)
         gen_containers = [gen_view(g, session) for g in curr_gens]
         return fh.Main(
             fh.Div(
+                gen_form_toggle(curr_gen_form),
                 fh.Div(
-                    fh.Div(
-                        gen_form_url_button(curr_gen_form),
-                        id="get-gen-form-url-container",
-                        hx_ext="sse",
-                        sse_connect="/stream-gen-form-url-button",
-                        hx_swap="innerHTML",
-                        sse_swap="message",
-                        cls="flex items-center justify-center w-full h-full",
-                    ),
-                    fh.Div(
-                        gen_form_upload_button(curr_gen_form),
-                        id="get-gen-form-upload-container",
-                        hx_ext="sse",
-                        sse_connect="/stream-gen-form-upload-button",
-                        hx_swap="outerHTML",
-                        sse_swap="message",
-                        cls="flex items-center justify-center w-full h-full",
-                    ),
-                    cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
+                    id="gen-form",
+                    hx_get="/get-gen-form/" + curr_gen_form,
+                    hx_target="#gen-form",
+                    hx_swap="outerHTML",
+                    hx_trigger="load",
                 ),
-                get_gen_form("image-url", session),
                 cls="w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
-            fh.Div(
-                fh.Div(
-                    clear_gens_button(curr_gens),
-                    id="clear-gens-button-container",
-                    hx_ext="sse",
-                    sse_connect="/stream-clear-gens-button",
-                    hx_swap="innerHTML",
-                    sse_swap="message",
-                    cls="flex items-center justify-center w-full h-full",
-                ),
-                fh.Div(
-                    export_gens_button(curr_gens),
-                    id="export-gens-button-container",
-                    hx_ext="sse",
-                    sse_connect="/stream-export-gens-button",
-                    hx_swap="innerHTML",
-                    sse_swap="message",
-                    cls="flex items-center justify-center w-full h-full",
-                ),
-                cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-2/3",
-            ),
+            gen_manage(curr_gens),
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
@@ -557,31 +496,11 @@ def modal_get():  # noqa: C901
                 "Request New Key",
                 id="request-new-key",
                 hx_post="/request-key",
-                target_id="api-key-table",
+                hx_target="#api-key-table",
                 hx_swap="afterbegin",
                 cls="text-blue-300 hover:text-blue-100 p-2 w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
-            fh.Div(
-                fh.Div(
-                    clear_keys_button(curr_keys),
-                    id="clear-keys-button-container",
-                    hx_ext="sse",
-                    sse_connect="/stream-clear-keys-button",
-                    hx_swap="innerHTML",
-                    sse_swap="message",
-                    cls="flex items-center justify-center w-full h-full",
-                ),
-                fh.Div(
-                    export_keys_button(curr_keys),
-                    id="export-keys-button-container",
-                    hx_ext="sse",
-                    sse_connect="/stream-export-keys-button",
-                    hx_swap="innerHTML",
-                    sse_swap="message",
-                    cls="flex items-center justify-center w-full h-full",
-                ),
-                cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
-            ),
+            key_manage(curr_keys),
             fh.Div(
                 fh.Div(
                     fh.Div("Key", cls="font-bold w-2/3"),
@@ -592,10 +511,6 @@ def modal_get():  # noqa: C901
                     *key_containers[::-1],
                     id="api-key-table",
                     style="max-height: 40vh; overflow-y: auto;",
-                    hx_ext="sse",
-                    sse_connect="/stream-keys",
-                    hx_swap="afterbegin",
-                    sse_swap="message",
                 ),
                 cls="w-2/3 flex flex-col gap-2 text-sm md:text-lg border-slate-500 border-2",
             ),
@@ -637,7 +552,7 @@ def modal_get():  # noqa: C901
             style="max-height: 10vh;",
         )
 
-    # background tasks (separate threads)
+    # helper fns
     ## generation
     @fh.threaded
     def generate_and_save(session, g):
@@ -678,7 +593,6 @@ def modal_get():  # noqa: C901
         gens.update(g)
 
     ## key generation
-    @fh.threaded
     def generate_key_and_save(k) -> None:
         k.key = str(uuid.uuid4())
         k.granted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -702,23 +616,6 @@ def modal_get():  # noqa: C901
                     )
             await sleep(1)
 
-    async def stream_key_updates(session):
-        while not shutdown_event.is_set():
-            keys = get_curr_keys(session)
-            for k in keys:
-                current_state = "granted" if k.key and k.granted_at else "loading"
-                if k.id not in shown_keys or shown_keys[k.id] != current_state:
-                    shown_keys[k.id] = current_state
-                    remove_script = fh.Script(f"document.getElementById('key-{k.id}')?.remove();")
-                    yield fh.sse_message(remove_script)
-                    yield fh.sse_message(
-                        key_view(
-                            k,
-                            session,
-                        )
-                    )
-            await sleep(1)
-
     async def stream_balance_updates():
         while not shutdown_event.is_set():
             curr_balance = get_curr_balance().balance
@@ -726,72 +623,6 @@ def modal_get():  # noqa: C901
             if shown_balance != curr_balance:
                 shown_balance = curr_balance
                 yield fh.sse_message(balance_view(shown_balance))
-            await sleep(1)
-
-    async def stream_gen_form_url_button_updates(session):
-        while not shutdown_event.is_set():
-            curr_gen_form = session["gen_form"]
-            global shown_gen_form
-            if shown_gen_form != curr_gen_form:
-                shown_gen_form = curr_gen_form
-                yield fh.sse_message(
-                    gen_form_url_button(curr_gen_form),
-                )
-            await sleep(1)
-
-    async def stream_gen_form_upload_button_updates(session):
-        while not shutdown_event.is_set():
-            curr_gen_form = session["gen_form"]
-            global shown_gen_form
-            if shown_gen_form != curr_gen_form:
-                shown_gen_form = curr_gen_form
-                yield fh.sse_message(
-                    gen_form_upload_button(curr_gen_form),
-                )
-            await sleep(1)
-
-    async def stream_clear_gens_button_updates(session):
-        while not shutdown_event.is_set():
-            curr_gens = get_curr_gens(session)
-            global shown_clear_gens
-            if shown_clear_gens != bool(curr_gens):
-                shown_clear_gens = bool(curr_gens)
-                yield fh.sse_message(
-                    clear_gens_button(curr_gens),
-                )
-            await sleep(1)
-
-    async def stream_export_gens_button_updates(session):
-        while not shutdown_event.is_set():
-            curr_gens = get_curr_gens(session)
-            global shown_export_gens
-            if shown_export_gens != bool(curr_gens):
-                shown_export_gens = bool(curr_gens)
-                yield fh.sse_message(
-                    export_gens_button(curr_gens),
-                )
-            await sleep(1)
-
-    async def stream_clear_keys_button_updates(session):
-        while not shutdown_event.is_set():
-            curr_keys = get_curr_keys(session)
-            global shown_clear_keys
-            if shown_clear_keys != bool(curr_keys):
-                shown_clear_keys = bool(curr_keys)
-                yield fh.sse_message(
-                    clear_keys_button(curr_keys),
-                )
-            await sleep(1)
-
-    async def stream_export_keys_button_updates(session):
-        while not shutdown_event.is_set():
-            curr_keys = get_curr_keys(session)
-            global shown_export_keys
-            if shown_export_keys != bool(curr_keys):
-                shown_export_keys = bool(curr_keys)
-                yield fh.sse_message(
-                    export_keys_button(curr_keys),
-                )
             await sleep(1)
 
     # routes
@@ -870,95 +701,70 @@ def modal_get():  # noqa: C901
     async def stream_gens(session):
         return fh.EventStream(stream_gen_updates(session))
 
-    @f_app.get("/stream-keys")
-    async def stream_keys(session):
-        return fh.EventStream(stream_key_updates(session))
-
     @f_app.get("/stream-balance")
     async def stream_balance():
         return fh.EventStream(stream_balance_updates())
 
-    @f_app.get("/stream-gen-form-url-button")
-    def stream_gen_form_url_button(session):
-        return fh.EventStream(stream_gen_form_url_button_updates(session))
-
-    @f_app.get("/stream-gen-form-upload-button")
-    def stream_gen_form_upload_button(session):
-        return fh.EventStream(stream_gen_form_upload_button_updates(session))
-
-    @f_app.get("/stream-clear-gens-button")
-    def stream_clear_gens_button(session):
-        return fh.EventStream(stream_clear_gens_button_updates(session))
-
-    @f_app.get("/stream-export-gens-button")
-    def stream_export_gens_button(session):
-        return fh.EventStream(stream_export_gens_button_updates(session))
-
-    @f_app.get("/stream-clear-keys-button")
-    def stream_clear_keys_button(session):
-        return fh.EventStream(stream_clear_keys_button_updates(session))
-
-    @f_app.get("/stream-export-keys-button")
-    def stream_export_keys_button(session):
-        return fh.EventStream(stream_export_keys_button_updates(session))
-
     ## gen form view
-    @f_app.post("/get-gen-form/{view}")
+    @f_app.get("/get-gen-form/{view}")
     def get_gen_form(view: str, session):
         session["gen_form"] = view
         return (
-            fh.Form(
-                fh.Div(
-                    fh.Input(
-                        id="new-image-url",
-                        name="image_url",  # passed to fn call for python syntax
-                        placeholder="Enter an image url",
+            (
+                fh.Form(
+                    fh.Div(
+                        fh.Input(
+                            id="new-image-url",
+                            name="image_url",  # passed to fn call for python syntax
+                            placeholder="Enter an image url",
+                        ),
+                        fh.Input(
+                            id="new-question",
+                            name="question",
+                            placeholder="Specify format or question",
+                        ),
+                        fh.Button(
+                            "Scan",
+                            type="submit",
+                            cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                        ),
+                        cls="flex flex-col md:gap-2",
                     ),
-                    fh.Input(
-                        id="new-question",
-                        name="question",
-                        placeholder="Specify format or question",
+                    hx_post="/url",
+                    hx_target="#gen-list",
+                    hx_swap="afterbegin",
+                    id="gen-form",
+                    cls="w-full h-full",
+                )
+                if view == "image-url"
+                else fh.Form(
+                    fh.Div(
+                        fh.Input(
+                            id="new-image-upload",
+                            name="image_file",
+                            type="file",
+                            accept="image/*",
+                        ),
+                        fh.Input(
+                            id="new-question",
+                            name="question",
+                            placeholder="Specify format or question",
+                        ),
+                        fh.Button(
+                            "Scan",
+                            type="submit",
+                            cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
+                        ),
+                        cls="flex flex-col gap-4",
                     ),
-                    fh.Button(
-                        "Scan",
-                        type="submit",
-                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                    ),
-                    cls="flex flex-col md:gap-2",
+                    hx_post="/upload",
+                    hx_target="#gen-list",
+                    hx_swap="afterbegin",
+                    id="gen-form",
+                    cls="w-full h-full",
                 ),
-                hx_post="/url",
-                target_id="gen-list",
-                hx_swap="afterbegin",
-                id="gen-form",
-                cls="w-full h-full",
-            )
-            if view == "image-url"
-            else fh.Form(
-                fh.Div(
-                    fh.Input(
-                        id="new-image-upload",
-                        name="image_file",
-                        type="file",
-                        accept="image/*",
-                    ),
-                    fh.Input(
-                        id="new-question",
-                        name="question",
-                        placeholder="Specify format or question",
-                    ),
-                    fh.Button(
-                        "Scan",
-                        type="submit",
-                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                    ),
-                    cls="flex flex-col gap-4",
-                ),
-                hx_post="/upload",
-                target_id="gen-list",
-                hx_swap="afterbegin",
-                id="gen-form",
-                cls="w-full h-full",
             ),
+            gen_form_toggle(view, "outerHTML:#gen-form-toggle"),
         )
 
     ## generation routes
@@ -1003,7 +809,12 @@ def modal_get():  # noqa: C901
             )
         )
         generate_and_save(session, g)
-        return gen_view(g, session), clear_img_input, clear_q_input
+        return (
+            gen_view(g, session),
+            clear_img_input,
+            clear_q_input,
+            gen_manage(get_curr_gens(session), "outerHTML:#gen-manage"),
+        )
 
     @f_app.post("/upload")
     async def generate_from_upload(session, image_file: fh.UploadFile, question: str):
@@ -1101,7 +912,12 @@ def modal_get():  # noqa: C901
         )
         generate_and_save(session, g)
 
-        return gen_view(g, session), clear_img_input, clear_q_input
+        return (
+            gen_view(g, session),
+            clear_img_input,
+            clear_q_input,
+            gen_manage(get_curr_gens(session), "outerHTML:#gen-manage"),
+        )
 
     ## api key request
     @f_app.post("/request-key")
@@ -1111,7 +927,7 @@ def modal_get():  # noqa: C901
             return None
         k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=session["session_id"]))
         generate_key_and_save(k)
-        return key_view(k, session)
+        return key_view(k, session), key_manage(get_curr_keys(session), "outerHTML:#key-manage")
 
     ## clear
     @f_app.delete("/gens")
