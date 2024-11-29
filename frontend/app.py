@@ -172,7 +172,7 @@ def modal_get():  # noqa: C901
             cls=cls,
         )
 
-    def gen_view(g, session):
+    def gen_view(g, session, hx_swap_oob="false"):
         ### check if g and session are valid
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -215,6 +215,7 @@ def modal_get():  # noqa: C901
                 cls="w-full flex gap-4",
                 style="max-height: 40vh;",
                 id=f"gen-{g.id}",
+                hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
             )
         elif g.response:
             return fh.Card(
@@ -242,6 +243,7 @@ def modal_get():  # noqa: C901
                 cls="w-full flex gap-4",
                 style="max-height: 40vh; overflow-y: auto;",
                 id=f"gen-{g.id}",
+                hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
             )
         return fh.Card(
             fh.Img(
@@ -260,6 +262,7 @@ def modal_get():  # noqa: C901
             cls="w-full flex gap-4",
             style="max-height: 40vh;",
             id=f"gen-{g.id}",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
         )
 
     def key_view(k, session):
@@ -384,6 +387,7 @@ def modal_get():  # noqa: C901
             else None,
             fh.Button(
                 "Export to CSV",
+                id="export-gens-csv",
                 hx_get="/export-gens",
                 hx_target="this",
                 hx_swap="none",
@@ -411,6 +415,7 @@ def modal_get():  # noqa: C901
             else None,
             fh.Button(
                 "Export to CSV",
+                id="export-keys-csv",
                 hx_get="/export-keys",
                 hx_target="this",
                 hx_swap="none",
@@ -604,14 +609,21 @@ def modal_get():  # noqa: C901
             curr_gens = get_curr_gens(session)
             for g in curr_gens:
                 current_state = "response" if g.response else "failed" if g.failed else "loading"
-                if g.id not in shown_generations or shown_generations[g.id] != current_state:
+                if g.id not in shown_generations:
                     shown_generations[g.id] = current_state
-                    remove_script = fh.Script(f"document.getElementById('gen-{g.id}')?.remove();")
-                    yield fh.sse_message(remove_script)
                     yield fh.sse_message(
                         gen_view(
                             g,
                             session,
+                        )
+                    )
+                elif shown_generations[g.id] != current_state:
+                    shown_generations[g.id] = current_state
+                    yield fh.sse_message(
+                        gen_view(
+                            g,
+                            session,
+                            hx_swap_oob="true",
                         )
                     )
             await sleep(1)
@@ -934,8 +946,11 @@ def modal_get():  # noqa: C901
     def clear_all(session):
         ids = [g.id for g in gens(where=f"session_id == '{session['session_id']}'")]
         for id in ids:
+            g = gens.get(id)
+            if g and g.image_file and os.path.exists(g.image_file):
+                os.remove(g.image_file)
             gens.delete(id)
-        fh.add_toast(session, "Deleted generations.", "success")
+        fh.add_toast(session, "Deleted generations and image files.", "success")
         return fh.RedirectResponse("/", status_code=303)
 
     @f_app.delete("/keys")
@@ -1068,5 +1083,4 @@ def modal_get():  # noqa: C901
 #       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
 #       - add form validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
 # - better url/file validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
-# - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
 # - add animations: https://hypermedia.systems/a-dynamic-archive-ui/#_smoothing_things_out_animations_in_htmx
