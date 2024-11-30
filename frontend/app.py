@@ -186,9 +186,9 @@ def modal_get():  # noqa: C901
             return None
 
         image_src = None
-        if g.image_url:
+        if g.image_url and validate_image_url(g.image_url):
             image_src = g.image_url
-        elif g.image_file:
+        elif g.image_file and isinstance(validate_image_file(image_file=None, upload_path=Path(g.image_file)), Path):
             temp_path = parent_path / Path(g.image_file).name
             with open(temp_path, "wb") as f:
                 f.write(open(g.image_file, "rb").read())
@@ -555,6 +555,65 @@ def modal_get():  # noqa: C901
         )
 
     # helper fns
+    ## validation
+    def validate_image_url(image_url: str) -> bool:
+        return validators.url(image_url)
+
+    def validate_image_file(image_file: fh.UploadFile = None, upload_path: Path = None) -> str | Path:
+        if image_file is not None:
+            # Ensure extension is valid image
+            valid_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"}
+            file_extension = Path(image_file.filename).suffix.lower()
+            if file_extension not in valid_extensions:
+                return "Invalid file type. Please upload an image."
+
+            # Write file to disk
+            filebuffer = image_file.read()
+            upload_path = upload_dir / f"{uuid.uuid4()}{file_extension}"
+            upload_path.write_bytes(filebuffer)
+
+        # Verify upload path
+        if not upload_path.exists():
+            return "Error: File not found."
+
+        # Verify MIME type and magic #
+        img = Image.open(upload_path)
+        try:
+            img.verify()
+        except Exception as e:
+            os.remove(upload_path)
+            return f"Error: {e}"
+
+        # Limit img size
+        MAX_FILE_SIZE_MB = 5
+        MAX_DIMENSIONS = (4096, 4096)
+        if os.path.getsize(upload_path) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            os.remove(upload_path)
+            return f"File size exceeds {MAX_FILE_SIZE_MB}MB limit."
+        with Image.open(upload_path) as img:
+            if img.size[0] > MAX_DIMENSIONS[0] or img.size[1] > MAX_DIMENSIONS[1]:
+                os.remove(upload_path)
+                return f"Image dimensions exceed {MAX_DIMENSIONS[0]}x{MAX_DIMENSIONS[1]} pixels limit."
+
+        # Run antivirus
+        try:
+            result = subprocess.run(  # noqa: S603
+                ["python", "main.py", str(upload_path)],  # noqa: S607
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd="/Python-Antivirus",
+            )
+            scan_result = result.stdout.strip().lower()
+            if scan_result == "infected":
+                os.remove(upload_path)
+                return "Potential threat detected."
+        except Exception as e:
+            os.remove(upload_path)
+            return f"Error during antivirus scan: {e}"
+
+        return upload_path
+
     ## generation
     @fh.threaded
     def generate_and_save(session, g):
@@ -773,7 +832,7 @@ def modal_get():  # noqa: C901
         if not image_url:
             fh.add_toast(session, "No image URL provided", "error")
             return None
-        if not validators.url(image_url):
+        if not validate_image_url(image_url):
             fh.add_toast(session, "Invalid image URL", "error")
             return None
 
@@ -829,60 +888,13 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "No image uploaded", "error")
             return None
 
-        # Ensure extension is valid image
-        valid_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"}
-        file_extension = Path(image_file.filename).suffix.lower()
-        if file_extension not in valid_extensions:
-            fh.add_toast(session, "Invalid file type. Please upload an image.", "error")
+        # Validate image file
+        res = validate_image_file(image_file)
+        if isinstance(res, str):
+            fh.add_toast(session, res, "error")
             return None
-
-        # Write file to disk
-        filebuffer = await image_file.read()
-        upload_path = upload_dir / f"{uuid.uuid4()}{file_extension}"
-        upload_path.write_bytes(filebuffer)
-
-        # Verify MIME type and magic #
-        img = Image.open(upload_path)
-        try:
-            img.verify()
-        except Exception as e:
-            fh.add_toast(session, f"Error: {e}", "error")
-            os.remove(upload_path)
-            return None
-
-        # Limit img size
-        MAX_FILE_SIZE_MB = 5
-        MAX_DIMENSIONS = (4096, 4096)
-        if os.path.getsize(upload_path) > MAX_FILE_SIZE_MB * 1024 * 1024:
-            fh.add_toast(session, f"File size exceeds {MAX_FILE_SIZE_MB}MB limit.", "error")
-            os.remove(upload_path)
-            return None
-        with Image.open(upload_path) as img:
-            if img.size[0] > MAX_DIMENSIONS[0] or img.size[1] > MAX_DIMENSIONS[1]:
-                fh.add_toast(
-                    session, f"Image dimensions exceed {MAX_DIMENSIONS[0]}x{MAX_DIMENSIONS[1]} pixels limit.", "error"
-                )
-                os.remove(upload_path)
-                return None
-
-        # Run antivirus
-        try:
-            result = subprocess.run(  # noqa: S603
-                ["python", "main.py", str(upload_path)],  # noqa: S607
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd="/Python-Antivirus",
-            )
-            scan_result = result.stdout.strip().lower()
-            if scan_result == "infected":
-                fh.add_toast(session, "Potential threat detected.", "error")
-                os.remove(upload_path)
-                return None
-        except Exception as e:
-            fh.add_toast(session, f"Error during antivirus scan: {e}", "error")
-            os.remove(upload_path)
-            return None
+        else:
+            upload_path = res
 
         # Warn if we're out of balance
         curr_balance = get_curr_balance()
