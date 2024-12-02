@@ -232,6 +232,7 @@ def modal_get():  # noqa: C901
                         g.response,
                         onclick="navigator.clipboard.writeText(this.innerText);",
                         hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_indicator="#spinner",
                         hx_target="#toast-container",
                         hx_swap="outerHTML",
                         cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
@@ -298,6 +299,7 @@ def modal_get():  # noqa: C901
                         ),
                         onclick=f"navigator.clipboard.writeText('{k.key}');",
                         hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_indicator="#spinner",
                         hx_target="#toast-container",
                         hx_swap="outerHTML",
                         cls="text-blue-300 hover:text-blue-100 cursor-pointer w-2/3",
@@ -352,6 +354,7 @@ def modal_get():  # noqa: C901
                 if gen_form == "image-url"
                 else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                 hx_get="/get-gen-form/image-url",
+                hx_indicator="#spinner",
                 hx_target="#gen-form",
                 hx_swap="innerHTML",
             ),
@@ -362,6 +365,7 @@ def modal_get():  # noqa: C901
                 if gen_form == "image-upload"
                 else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                 hx_get="/get-gen-form/image-upload",
+                hx_indicator="#spinner",
                 hx_target="#gen-form",
                 hx_swap="innerHTML",
             ),
@@ -375,6 +379,7 @@ def modal_get():  # noqa: C901
             fh.Button(
                 "Clear all",
                 hx_delete="/gens",
+                hx_indicator="#spinner",
                 hx_target="body",
                 hx_push_url="true",
                 hx_confirm="Are you sure?",
@@ -386,6 +391,7 @@ def modal_get():  # noqa: C901
                 "Export to CSV",
                 id="export-gens-csv",
                 hx_get="/export-gens",
+                hx_indicator="#spinner",
                 hx_target="this",
                 hx_swap="none",
                 hx_boost="false",
@@ -403,6 +409,7 @@ def modal_get():  # noqa: C901
             fh.Button(
                 "Clear all",
                 hx_delete="/keys",
+                hx_indicator="#spinner",
                 hx_target="body",
                 hx_push_url="true",
                 hx_confirm="Are you sure?",
@@ -414,6 +421,7 @@ def modal_get():  # noqa: C901
                 "Export to CSV",
                 id="export-keys-csv",
                 hx_get="/export-keys",
+                hx_indicator="#spinner",
                 hx_target="this",
                 hx_swap="none",
                 hx_boost="false",
@@ -433,6 +441,47 @@ def modal_get():  # noqa: C901
                 f"{NAME}",
                 href="/",
                 cls="text-xl text-blue-300 hover:text-blue-100 font-mono font-family:Consolas, Monaco, 'Lucida Console', 'Liberation Mono', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', 'Courier New'",
+            ),
+            fh.Svg(
+                fh.NotStr(
+                    """<style>
+                        .spinner_zWVm { animation: spinner_5QiW 1.2s linear infinite, spinner_PnZo 1.2s linear infinite; }
+                        .spinner_gfyD { animation: spinner_5QiW 1.2s linear infinite, spinner_4j7o 1.2s linear infinite; animation-delay: .1s; }
+                        .spinner_T5JJ { animation: spinner_5QiW 1.2s linear infinite, spinner_fLK4 1.2s linear infinite; animation-delay: .1s; }
+                        .spinner_E3Wz { animation: spinner_5QiW 1.2s linear infinite, spinner_tDji 1.2s linear infinite; animation-delay: .2s; }
+                        .spinner_g2vs { animation: spinner_5QiW 1.2s linear infinite, spinner_CMiT 1.2s linear infinite; animation-delay: .2s; }
+                        .spinner_ctYB { animation: spinner_5QiW 1.2s linear infinite, spinner_cHKR 1.2s linear infinite; animation-delay: .2s; }
+                        .spinner_BDNj { animation: spinner_5QiW 1.2s linear infinite, spinner_Re6e 1.2s linear infinite; animation-delay: .3s; }
+                        .spinner_rCw3 { animation: spinner_5QiW 1.2s linear infinite, spinner_EJmJ 1.2s linear infinite; animation-delay: .3s; }
+                        .spinner_Rszm { animation: spinner_5QiW 1.2s linear infinite, spinner_YJOP 1.2s linear infinite; animation-delay: .4s; }
+                        @keyframes spinner_5QiW { 0%, 50% { width: 7.33px; height: 7.33px; } 25% { width: 1.33px; height: 1.33px; } }
+                        @keyframes spinner_PnZo { 0%, 50% { x: 1px; y: 1px; } 25% { x: 4px; y: 4px; } }
+                        @keyframes spinner_4j7o { 0%, 50% { x: 8.33px; y: 1px; } 25% { x: 11.33px; y: 4px; } }
+                        @keyframes spinner_fLK4 { 0%, 50% { x: 1px; y: 8.33px; } 25% { x: 4px; y: 11.33px; } }
+                        @keyframes spinner_tDji { 0%, 50% { x: 15.66px; y: 1px; } 25% { x: 18.66px; y: 4px; } }
+                        @keyframes spinner_CMiT { 0%, 50% { x: 8.33px; y: 8.33px; } 25% { x: 11.33px; y: 11.33px; } }
+                        @keyframes spinner_cHKR { 0%, 50% { x: 1px; y: 15.66px; } 25% { x: 4px; y: 18.66px; } }
+                        @keyframes spinner_Re6e { 0%, 50% { x: 15.66px; y: 8.33px; } 25% { x: 18.66px; y: 11.33px; } }
+                        @keyframes spinner_EJmJ { 0%, 50% { x: 8.33px; y: 15.66px; } 25% { x: 11.33px; y: 18.66px; } }
+                        @keyframes spinner_YJOP { 0%, 50% { x: 15.66px; y: 15.66px; } 25% { x: 18.66px; y: 18.66px; } }
+                    </style>
+                    <rect class="spinner_zWVm" x="1" y="1" width="7.33" height="7.33"/>
+                    <rect class="spinner_gfyD" x="8.33" y="1" width="7.33" height="7.33"/>
+                    <rect class="spinner_T5JJ" x="1" y="8.33" width="7.33" height="7.33"/>
+                    <rect class="spinner_E3Wz" x="15.66" y="1" width="7.33" height="7.33"/>
+                    <rect class="spinner_g2vs" x="8.33" y="8.33" width="7.33" height="7.33"/>
+                    <rect class="spinner_ctYB" x="1" y="15.66" width="7.33" height="7.33"/>
+                    <rect class="spinner_BDNj" x="15.66" y="8.33" width="7.33" height="7.33"/>
+                    <rect class="spinner_rCw3" x="8.33" y="15.66" width="7.33" height="7.33"/>
+                    <rect class="spinner_Rszm" x="15.66" y="15.66" width="7.33" height="7.33"/>
+                    """
+                ),
+                width="24",
+                height="24",
+                viewBox="0 0 24 24",
+                fill="none",
+                id="spinner",
+                cls="htmx-indicator w-16 h-16 absolute top-4 left-1/2 transform -translate-x-1/2 fill-blue-300",
             ),
             fh.Div(
                 fh.A(
@@ -455,7 +504,7 @@ def modal_get():  # noqa: C901
                 ),
                 cls="flex flex-col items-end md:flex-row md:items-center gap-2 md:gap-8",
             ),
-            cls="flex justify-between p-4",
+            cls="flex justify-between p-4 relative",
             style="max-height: 10vh;",
         )
 
@@ -469,6 +518,7 @@ def modal_get():  # noqa: C901
                 fh.Div(
                     id="gen-form",
                     hx_get="/get-gen-form/" + curr_gen_form,
+                    hx_indicator="#spinner",
                     hx_target="#gen-form",
                     hx_swap="outerHTML",
                     hx_trigger="load",
@@ -498,6 +548,7 @@ def modal_get():  # noqa: C901
                 "Request New Key",
                 id="request-new-key",
                 hx_post="/request-key",
+                hx_indicator="#spinner",
                 hx_target="#api-key-table",
                 hx_swap="afterbegin",
                 cls="text-blue-300 hover:text-blue-100 p-2 w-2/3 border-blue-300 border-2 hover:border-blue-100",
@@ -786,6 +837,7 @@ def modal_get():  # noqa: C901
                         cls="flex flex-col md:gap-2",
                     ),
                     hx_post="/url",
+                    hx_indicator="#spinner",
                     hx_target="#gen-list",
                     hx_swap="afterbegin",
                     id="gen-form",
@@ -813,6 +865,7 @@ def modal_get():  # noqa: C901
                         cls="flex flex-col gap-4",
                     ),
                     hx_post="/upload",
+                    hx_indicator="#spinner",
                     hx_target="#gen-list",
                     hx_swap="afterbegin",
                     id="gen-form",
@@ -1073,11 +1126,11 @@ def modal_get():  # noqa: C901
 
 # TODO:
 # - add smooth db migrations: prob switch to sqlmodel + alembic
-# - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
-# - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
 # - add gens/keys counts: https://hypermedia.systems/more-htmx-patterns/#_lazy_loading
 # - add granular delete: https://hypermedia.systems/more-htmx-patterns/#_inline_delete
 # - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
+# - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
+# - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 
 # - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 #   - Only allow authorized users to upload files:
