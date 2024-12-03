@@ -481,7 +481,7 @@ def modal_get():  # noqa: C901
                 viewBox="0 0 24 24",
                 fill="none",
                 id="spinner",
-                cls="htmx-indicator w-16 h-16 absolute top-4 left-1/2 transform -translate-x-1/2 fill-blue-300",
+                cls="htmx-indicator w-8 h-8 absolute top-4 left-1/2 transform -translate-x-1/2 fill-blue-300",
             ),
             fh.Div(
                 fh.A(
