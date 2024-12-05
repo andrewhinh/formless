@@ -29,6 +29,9 @@ Set up the environment:
 
 ```bash
 uv sync --all-extras --dev
+uv run pre-commit install
+export PYTHONPATH=.
+echo "export PYTHONPATH=.:$PYTHONPATH" >> ~/.bashrc
 modal setup
 ```
 
@@ -47,6 +50,14 @@ DOMAIN=
 
 WANDB_API_KEY=
 WANDB_ENTITY=
+```
+
+### Useful Commands
+
+Lint and format:
+
+```bash
+uv run pre-commit run --all-files
 ```
 
 ### Repository Structure
