@@ -1,21 +1,15 @@
 import os
-import tempfile
-import time
-from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 import modal
-from fastapi import FastAPI, HTTPException, Request, Security
-from fastapi.security import APIKeyHeader
-from PIL import ImageFile
 
+from db.models import ApiKeyCreate, get_db_session
 from utils import (
-    DATA_VOLUME,
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
     GPU_IMAGE,
+    IN_PROD,
     MINUTES,
     NAME,
     VOLUME_CONFIG,
@@ -23,7 +17,7 @@ from utils import (
 )
 
 parent_path: Path = Path(__file__).parent
-ImageFile.LOAD_TRUNCATED_IMAGES = True
+db_dir_path = parent_path.parent / "db"
 
 # -----------------------------------------------------------------------------
 
@@ -61,18 +55,24 @@ def download_model():
 
 
 # Modal
-in_prod: bool = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
-SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if in_prod else ".env.dev")]
-IMAGE = GPU_IMAGE.pip_install(  # add Python dependencies
-    "vllm==0.6.2",
-    "term-image==0.7.2",
-    "python-fasthtml==0.6.10",
-    "sqlite-utils==3.18",
-    "validators==0.34.0",
-).run_function(
-    download_model,
-    secrets=SECRETS,
-    volumes=VOLUME_CONFIG,
+SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if IN_PROD else ".env.dev")]
+IMAGE = (
+    GPU_IMAGE.pip_install(  # add Python dependencies
+        "vllm==0.6.2",
+        "term-image==0.7.2",
+        "fastapi==0.115.6",
+        "validators==0.34.0",
+    )
+    .run_function(
+        download_model,
+        secrets=SECRETS,
+        volumes=VOLUME_CONFIG,
+    )
+    .copy_local_dir(db_dir_path, "/root/")
+    .run_commands(
+        ["alembic revision --autogenerate -m " + NAME + " --config=/root/db", "alembic upgrade head --config=/root/db"],
+        secrets=SECRETS,
+    )
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
@@ -104,22 +104,27 @@ app = modal.App(name=APP_NAME)
 @modal.asgi_app()
 def modal_get():
     import io
+    import os
+    import secrets
+    import tempfile
+    import time
+    from uuid import uuid4
 
     import requests
     import validators
-    from fasthtml import common as fh
-    from PIL import Image
+    from fastapi import FastAPI, HTTPException, Request, Security
+    from fastapi.security import APIKeyHeader
+    from PIL import Image, ImageFile
+    from sqlmodel import Session as DBSession
+    from sqlmodel import select
     from term_image.image import from_file
     from vllm import LLM, SamplingParams
 
-    f_app = FastAPI()
+    from db.models import ApiKey
 
-    db_path = f"/{DATA_VOLUME}/main.db"
-    tables = fh.database(db_path).t
-    api_keys = tables.api_keys
-    if api_keys not in tables:
-        api_keys.create(key=str, granted_at=str, session_id=str, id=int, pk="id")
-    ApiKey = api_keys.dataclass()
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+    f_app = FastAPI()
 
     llm = LLM(
         model=config["model"],
@@ -131,9 +136,10 @@ def modal_get():
     )
 
     async def verify_api_key(
+        db_session: DBSession = get_db_session(),
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
-        if api_keys(limit=1, where=f"key == '{api_key_header}'") is not None:
+        if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
             return True
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
@@ -242,12 +248,11 @@ def modal_get():
         return generated_text
 
     @f_app.post("/api-key")
-    async def apikey() -> str:
-        k = api_keys.insert(ApiKey(key=None, granted_at=None, session_id=None))
-        k.key = str(uuid4())
-        k.granted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        k.session_id = str(uuid4())
-        api_keys.update(k)
+    async def apikey(db_session: DBSession = get_db_session()) -> str:
+        k = ApiKeyCreate(key=secrets.token_hex(32))
+        db_session.add(k)
+        db_session.commit()
+        db_session.refresh(k)
         return k.key
 
     return f_app
