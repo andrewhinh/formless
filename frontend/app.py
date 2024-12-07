@@ -130,7 +130,7 @@ def modal_get():  # noqa: C901
         return db_session.exec(select(ApiKey).where(ApiKey.session_id == session["session_id"])).all()
 
     def get_curr_balance() -> GlobalBalance:
-        curr_balance = db_session.exec(select(GlobalBalance)).first()
+        curr_balance = db_session.get(GlobalBalance, 1)
         if not curr_balance:
             new_balance = GlobalBalanceCreate(balance=init_balance)
             curr_balance = GlobalBalance.model_validate(new_balance)
@@ -176,6 +176,8 @@ def modal_get():  # noqa: C901
         ### check if g and session are valid
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
+            return None
+        if db_session.get(Gen, g.id) is None:
             return None
         if g.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -266,6 +268,8 @@ def modal_get():  # noqa: C901
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
+        if db_session.get(ApiKey, k.id) is None:
+            return None
         if k.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
@@ -340,6 +344,8 @@ def modal_get():  # noqa: C901
     ):
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
+            return None
+        if db_session.get(GlobalBalance, gb.id) is None:
             return None
 
         return (
@@ -629,7 +635,7 @@ def modal_get():  # noqa: C901
                 return "Invalid file type. Please upload an image."
 
             # Write file to disk
-            filebuffer = image_file.read()
+            filebuffer = image_file.file.read()
             upload_path = upload_dir / f"{uuid.uuid4()}{file_extension}"
             upload_path.write_bytes(filebuffer)
 
@@ -678,11 +684,11 @@ def modal_get():  # noqa: C901
     ## generation
     @fh.threaded
     def generate_and_save(
-        g: GenCreate,
+        g: Gen,
         session,
     ):
         k = ApiKeyCreate(session_id=session["session_id"])
-        generate_key_and_save(k)
+        k = generate_key_and_save(k)
 
         if g.image_url:
             response = requests.post(
@@ -702,8 +708,7 @@ def modal_get():  # noqa: C901
             )
 
         # TODO: uncomment for debugging
-        # g.response = "temp"
-        # g = Gen.model_validate(g)
+        # g.sqlmodel_update({"response": "temp"})  # have to use sqlmodel_update since object is already committed
         # db_session.add(g)
         # db_session.commit()
         # db_session.refresh(g)
@@ -715,10 +720,9 @@ def modal_get():  # noqa: C901
 
         if not response.ok:
             fh.add_toast(session, "Failed with status code: " + str(response.status_code), "error")
-            g.failed = True
+            g.sqlmodel_update({"failed": True})
         else:
-            g.response = response.json()
-        g = Gen.model_validate(g)
+            g.sqlmodel_update({"response": response.json()})
         db_session.add(g)
         db_session.commit()
         db_session.refresh(g)
@@ -726,19 +730,20 @@ def modal_get():  # noqa: C901
     ## key generation
     def generate_key_and_save(
         k: ApiKeyCreate,
-    ):
+    ) -> ApiKey:
         k.key = secrets.token_hex(16)
         k = ApiKey.model_validate(k)
         db_session.add(k)
         db_session.commit()
         db_session.refresh(k)
+        return k
 
     # SSE helpers
     async def stream_gen_updates(
         session,
     ):
         while not shutdown_event.is_set():
-            if not session.get("session_id"):
+            if not session.get("session_id"):  # since called slightly before session is set
                 await sleep(1)
                 continue
             curr_gens = get_curr_gens(session)
@@ -748,7 +753,6 @@ def modal_get():  # noqa: C901
                 if g.id not in shown_generations or shown_generations[g.id] != current_state:
                     shown_generations[g.id] = current_state
                     yield fh.sse_message(fh.Script(f"document.getElementById('gen-{g.id}').remove();"))
-                    yield fh.sse_message(fh.Script("document.getElementById('gen-None').remove();"))
                     yield fh.sse_message(gen_view(g, session))
             await sleep(1)
 
@@ -756,7 +760,7 @@ def modal_get():  # noqa: C901
         session,
     ):
         while not shutdown_event.is_set():
-            if not session.get("session_id"):
+            if not session.get("session_id"):  # since called slightly before session is set
                 await sleep(1)
                 continue
             curr_balance = get_curr_balance()
@@ -943,7 +947,7 @@ def modal_get():  # noqa: C901
             return None
 
         # Decrement balance
-        curr_balance.balance -= 1
+        curr_balance.sqlmodel_update({"balance": curr_balance.balance - 1})
         db_session.add(curr_balance)
         db_session.commit()
         db_session.refresh(curr_balance)
@@ -962,6 +966,7 @@ def modal_get():  # noqa: C901
             question=question,
             session_id=session["session_id"],
         )
+        ## need to put in db since generate_and_save is threaded
         g = Gen.model_validate(g)
         db_session.add(g)
         db_session.commit()
@@ -982,37 +987,27 @@ def modal_get():  # noqa: C901
         image_file: fh.UploadFile,
         question: str,
     ):
-        # Check for session ID
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-
-        # Validate CSRF token
         if "csrf_token" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-
-        # Check for empty file
         if not image_file:
             fh.add_toast(session, "No image uploaded", "error")
             return None
-
-        # Validate image file
         res = validate_image_file(image_file)
         if isinstance(res, str):
             fh.add_toast(session, res, "error")
             return None
         else:
             upload_path = res
-
-        # Warn if we're out of balance
         curr_balance = get_curr_balance()
         if curr_balance.balance < 1:
             fh.add_toast(session, "Out of balance!", "error")
             return None
 
-        # Decrement balance
-        curr_balance.balance -= 1
+        curr_balance.sqlmodel_update({"balance": curr_balance.balance - 1})
         db_session.add(curr_balance)
         db_session.commit()
         db_session.refresh(curr_balance)
@@ -1027,10 +1022,11 @@ def modal_get():  # noqa: C901
 
         # Generate as before
         g = GenCreate(
-            image_file=upload_path,
+            image_file=str(upload_path),
             question=question,
             session_id=session["session_id"],
         )
+        ## need to put in db since generate_and_save is threaded
         g = Gen.model_validate(g)
         db_session.add(g)
         db_session.commit()
@@ -1050,13 +1046,11 @@ def modal_get():  # noqa: C901
     def generate_key(
         session,
     ):
-        print(session)
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
         k = ApiKeyCreate(session_id=session["session_id"])
-        generate_key_and_save(k)
-        print("Generated key:", k.key)
+        k = generate_key_and_save(k)
         k_read = ApiKeyRead.model_validate(k)
         read_keys = [ApiKeyRead.model_validate(k) for k in get_curr_keys(session)]
         return key_view(k_read, session), key_manage(read_keys, "outerHTML:#key-manage")
@@ -1066,9 +1060,8 @@ def modal_get():  # noqa: C901
     def clear_all(
         session,
     ):
-        ids = [g.id for g in get_curr_gens(session)]
-        for id in ids:
-            g = db_session.exec(select(Gen).where(Gen.id == id)).first()
+        gens = get_curr_gens(session)
+        for g in gens:
             if g and g.image_file and os.path.exists(g.image_file):
                 os.remove(g.image_file)
             db_session.delete(g)
@@ -1080,9 +1073,8 @@ def modal_get():  # noqa: C901
     def clear_keys(
         session,
     ):
-        ids = [k.id for k in get_curr_keys(session)]
-        for id in ids:
-            k = db_session.exec(select(ApiKey).where(ApiKey.id == id)).first()
+        keys = get_curr_keys(session)
+        for k in keys:
             db_session.delete(k)
             db_session.commit()
         fh.add_toast(session, "Deleted keys.", "success")
@@ -1196,7 +1188,7 @@ def modal_get():  # noqa: C901
             # session = event["data"]["object"]
             # print("Session completed", session)
             curr_balance = get_curr_balance()
-            curr_balance.balance += 50
+            curr_balance.sqlmodel_update({"balance": curr_balance.balance + 50})
             db_session.add(curr_balance)
             db_session.commit()
             db_session.refresh(curr_balance)

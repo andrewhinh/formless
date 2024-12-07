@@ -146,6 +146,7 @@ def modal_get():
     ) -> bool:
         if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
             return True
+        print(f"Invalid API key: {api_key_header}")
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
     @f_app.post("/")
@@ -157,14 +158,16 @@ def modal_get():
         print(f"Generating response to request {request_id}")
 
         if not validators.url(image_url):
+            print(f"Invalid request {request_id}: img_url={image_url}, question={question}")
             raise HTTPException(status_code=400, detail="Invalid image URL")
 
         response = requests.get(image_url, stream=True)
-        response.raise_for_status()
 
         try:
+            response.raise_for_status()
             image = Image.open(response.raw).convert("RGB")
         except Exception as e:
+            print(f"Error processing request {request_id}: error={str(e)}, img_url={image_url}, question={question}")
             raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}") from e
 
         prompt = f"<|image|><|begin_of_text|>{question}"
@@ -186,7 +189,11 @@ def modal_get():
 
         # show the question, image, and response in the terminal for demonstration purposes
         response = requests.get(image_url)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except Exception as e:
+            print(f"Error processing request {request_id}: error={str(e)}, img_url={image_url}, question={question}")
+            raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}") from e
         image_filename = image_url.split("/")[-1]
         image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
         with open(image_path, "wb") as file:
@@ -217,6 +224,7 @@ def modal_get():
         try:
             image = Image.open(io.BytesIO(image_data)).convert("RGB")
         except Exception as e:
+            print(f"Error processing request {request_id}: error={str(e)}, question={question}")
             raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}") from e
 
         prompt = f"<|image|><|begin_of_text|>{question}"
@@ -255,6 +263,7 @@ def modal_get():
     @f_app.post("/api-key")
     async def apikey(db_session: DBSession = Depends(get_db_session)) -> str:
         k = ApiKeyCreate(key=secrets.token_hex(16))
+        k = ApiKey.model_validate(k)
         db_session.add(k)
         db_session.commit()
         db_session.refresh(k)
