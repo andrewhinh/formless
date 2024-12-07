@@ -6,11 +6,11 @@ import modal
 
 from utils import (
     DATA_VOLUME,
-    FAVICON_PATH,  # noqa: F401, so available to browser
     IN_PROD,
     MINUTES,
     NAME,
     PYTHON_VERSION,
+    REMOTE_DB_URI,
     VOLUME_CONFIG,
 )
 
@@ -18,20 +18,6 @@ parent_path: Path = Path(__file__).parent
 
 
 # Modal
-def run_alembic():  # since volumes are needed to access db
-    import subprocess
-
-    subprocess.run(  # noqa: S602
-        [  # noqa: S607
-            # "if [ -d /{DATA_VOLUME}/versions ]; then cp -r /{DATA_VOLUME}/versions/* /root/db/migrations/versions/; else mkdir -p /root/db/migrations/versions; fi",  # TODO: figure out why versioning leads to empty db
-            f"export PYTHONPATH=/root/ && alembic -c /root/db/migrations/alembic.ini revision --autogenerate -m {NAME}",
-            "export PYTHONPATH=/root/ && alembic -c /root/db/migrations/alembic.ini upgrade head",
-            # f"cp -r /root/db/migrations/versions/* /{DATA_VOLUME}/versions/",
-        ],
-        shell=True,
-    )
-
-
 SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if IN_PROD else ".env.dev")]
 IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
@@ -44,13 +30,10 @@ IMAGE = (
         "stripe==11.1.0",
         "validators==0.34.0",
         "pillow==11.0.0",
-        "alembic==1.14.0",
         "sqlmodel==0.0.22",
-        "modal==0.67.25",
     )
+    .copy_local_file(parent_path / "favicon.ico", "/root/favicon.ico")
     .copy_local_dir(parent_path.parent / "db", "/root/db")
-    .copy_local_file(parent_path.parent / "utils.py", "/root/utils.py")
-    .run_function(run_alembic, secrets=SECRETS, volumes=VOLUME_CONFIG, force_build=True)
 )
 
 FE_TIMEOUT = 24 * 60 * MINUTES  # max
@@ -85,7 +68,7 @@ def modal_get():  # noqa: C901
     from PIL import Image
     from simpleicons.icons import si_github, si_pypi
     from sqlmodel import Session as DBSession
-    from sqlmodel import select
+    from sqlmodel import create_engine, select
     from starlette.middleware.cors import CORSMiddleware
 
     from db.models import (
@@ -98,7 +81,6 @@ def modal_get():  # noqa: C901
         GlobalBalance,
         GlobalBalanceCreate,
         GlobalBalanceRead,
-        get_db_session,
         init_balance,
     )
 
@@ -129,23 +111,33 @@ def modal_get():  # noqa: C901
     upload_dir.mkdir(exist_ok=True)
     os.chmod(upload_dir, 0o600)  # Read/write by owner only
 
-    def get_curr_gens(session: dict, db_session: DBSession) -> list[Gen]:
+    engine = create_engine(
+        url=REMOTE_DB_URI,
+        echo=not IN_PROD,
+    )
+    db_session = DBSession(engine)
+
+    def get_curr_gens(
+        session,
+    ) -> list[Gen]:
         return db_session.exec(
             select(Gen).where(Gen.session_id == session["session_id"]).order_by(Gen.request_at)
         ).all()
 
-    def get_curr_keys(session: dict, db_session: DBSession) -> list[ApiKey]:
+    def get_curr_keys(
+        session,
+    ) -> list[ApiKey]:
         return db_session.exec(select(ApiKey).where(ApiKey.session_id == session["session_id"])).all()
 
-    def get_curr_balance(db_session: DBSession) -> GlobalBalance:
-        try:
-            return db_session.exec(select(GlobalBalance)).first()
-        except Exception:
+    def get_curr_balance() -> GlobalBalance:
+        curr_balance = db_session.exec(select(GlobalBalance)).first()
+        if not curr_balance:
             new_balance = GlobalBalanceCreate(balance=init_balance)
-            db_session.add(new_balance)
+            curr_balance = GlobalBalance.model_validate(new_balance)
+            db_session.add(curr_balance)
             db_session.commit()
-            db_session.refresh(new_balance)
-            return new_balance
+            db_session.refresh(curr_balance)
+        return curr_balance
 
     ## stripe
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
@@ -177,13 +169,12 @@ def modal_get():  # noqa: C901
             cls=cls,
         )
 
-    def gen_view(g: GenRead, session: dict, db_session: DBSession):
+    def gen_view(
+        g: GenRead,
+        session,
+    ):
         ### check if g and session are valid
         if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
-        present = db_session.exec(select(Gen).where(Gen.id == g.id)).first()
-        if not present:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
         if g.session_id != session["session_id"]:
@@ -268,12 +259,11 @@ def modal_get():  # noqa: C901
             id=f"gen-{g.id}",
         )
 
-    def key_view(k: ApiKeyRead, session: dict, db_session: DBSession):
+    def key_view(
+        k: ApiKeyRead,
+        session,
+    ):
         if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
-        present = db_session.exec(select(ApiKey).where(ApiKey.id == k.id)).first()
-        if not present:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
         if k.session_id != session["session_id"]:
@@ -312,7 +302,7 @@ def modal_get():  # noqa: C901
                         id=f"key-element-{k.id}",
                     ),
                     fh.Div(
-                        k.granted_at,
+                        k.granted_at.strftime("%Y-%m-%d %H:%M:%S"),
                         cls="w-1/3",
                     ),
                     id=f"key-{k.id}",
@@ -344,12 +334,11 @@ def modal_get():  # noqa: C901
             cls="flex p-2",
         )
 
-    def balance_view(gb: GlobalBalanceRead, session: dict, db_session: DBSession) -> tuple:
+    def balance_view(
+        gb: GlobalBalanceRead,
+        session,
+    ):
         if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
-        present = db_session.exec(select(GlobalBalance).where(GlobalBalance.id == gb.id)).first()
-        if not present:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
 
@@ -358,7 +347,7 @@ def modal_get():  # noqa: C901
             fh.P(f"{gb.balance} credits", cls="font-bold"),
         )
 
-    def gen_form_toggle(gen_form: str, hx_swap_oob: bool = "false") -> fh.Div:
+    def gen_form_toggle(gen_form: str, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Image URL",
@@ -387,7 +376,7 @@ def modal_get():  # noqa: C901
             cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
         )
 
-    def gen_manage(curr_gens: list[GenRead], hx_swap_oob: bool = "false") -> fh.Div:
+    def gen_manage(curr_gens: list[GenRead], hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Clear all",
@@ -417,7 +406,7 @@ def modal_get():  # noqa: C901
             cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-2/3",
         )
 
-    def key_manage(curr_keys: list[ApiKeyRead], hx_swap_oob: bool = "false") -> fh.Div:
+    def key_manage(curr_keys: list[ApiKeyRead], hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Clear all",
@@ -448,7 +437,7 @@ def modal_get():  # noqa: C901
         )
 
     ## layout
-    def nav() -> fh.Nav:
+    def nav():
         return fh.Nav(
             fh.A(
                 f"{NAME}",
@@ -521,10 +510,13 @@ def modal_get():  # noqa: C901
             style="max-height: 10vh;",
         )
 
-    def main_content(session: dict, db_session: DBSession) -> fh.Main:
+    def main_content(
+        session,
+    ):
         curr_gen_form = session["gen_form"]
-        curr_gens = get_curr_gens(session, db_session)
-        gen_containers = [gen_view(g, session, db_session) for g in curr_gens]
+        curr_gens = get_curr_gens(session)
+        read_gens = [GenRead.model_validate(g) for g in curr_gens]
+        gen_containers = [gen_view(g, session) for g in read_gens]
         return fh.Main(
             fh.Div(
                 gen_form_toggle(curr_gen_form),
@@ -538,7 +530,7 @@ def modal_get():  # noqa: C901
                 ),
                 cls="w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
-            gen_manage(curr_gens),
+            gen_manage(read_gens),
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
@@ -553,10 +545,12 @@ def modal_get():  # noqa: C901
             style="max-height: 80vh;",
         )
 
-    def developer_page(session: dict, db_session: DBSession) -> fh.Main:
-        curr_keys = get_curr_keys(session, db_session)
+    def developer_page(
+        session,
+    ):
+        curr_keys = get_curr_keys(session)
         read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
-        key_containers = [key_view(k, session, db_session) for k in read_keys]
+        key_containers = [key_view(k, session) for k in read_keys]
         return fh.Main(
             fh.Button(
                 "Request New Key",
@@ -585,16 +579,16 @@ def modal_get():  # noqa: C901
             style="max-height: 80vh;",
         )
 
-    def toast_container() -> fh.Div:
+    def toast_container():
         return fh.Div(id="toast-container", cls="hidden")
 
     def footer(
-        db_session: DBSession,
-    ) -> fh.Footer:
+        session,
+    ):
         return fh.Footer(
             fh.Div(
                 fh.Div(
-                    balance_view(GlobalBalanceRead.model_validate(get_curr_balance(db_session))),
+                    balance_view(GlobalBalanceRead.model_validate(get_curr_balance()), session),
                     id="balance",
                     cls="flex items-start gap-0.5 md:gap-1",
                     hx_ext="sse",
@@ -683,7 +677,10 @@ def modal_get():  # noqa: C901
 
     ## generation
     @fh.threaded
-    def generate_and_save(g: GenCreate, session: dict, db_session: DBSession) -> None:
+    def generate_and_save(
+        g: GenCreate,
+        session,
+    ):
         k = ApiKeyCreate(session_id=session["session_id"])
         generate_key_and_save(k)
 
@@ -706,6 +703,7 @@ def modal_get():  # noqa: C901
 
         # TODO: uncomment for debugging
         # g.response = "temp"
+        # g = Gen.model_validate(g)
         # db_session.add(g)
         # db_session.commit()
         # db_session.refresh(g)
@@ -720,36 +718,52 @@ def modal_get():  # noqa: C901
             g.failed = True
         else:
             g.response = response.json()
+        g = Gen.model_validate(g)
         db_session.add(g)
         db_session.commit()
         db_session.refresh(g)
 
     ## key generation
-    def generate_key_and_save(k: ApiKeyCreate, db_session: DBSession) -> None:
-        k.key = secrets.token_hex(32)
+    def generate_key_and_save(
+        k: ApiKeyCreate,
+    ):
+        k.key = secrets.token_hex(16)
+        k = ApiKey.model_validate(k)
         db_session.add(k)
         db_session.commit()
         db_session.refresh(k)
 
     # SSE helpers
-    async def stream_gen_updates(session: dict, db_session: DBSession):
+    async def stream_gen_updates(
+        session,
+    ):
         while not shutdown_event.is_set():
-            curr_gens = get_curr_gens(session, db_session)
-            for g in curr_gens:
+            if not session.get("session_id"):
+                await sleep(1)
+                continue
+            curr_gens = get_curr_gens(session)
+            read_gens = [GenRead.model_validate(g) for g in curr_gens]
+            for g in read_gens:
                 current_state = "response" if g.response else "failed" if g.failed else "loading"
                 if g.id not in shown_generations or shown_generations[g.id] != current_state:
                     shown_generations[g.id] = current_state
                     yield fh.sse_message(fh.Script(f"document.getElementById('gen-{g.id}').remove();"))
+                    yield fh.sse_message(fh.Script("document.getElementById('gen-None').remove();"))
                     yield fh.sse_message(gen_view(g, session))
             await sleep(1)
 
-    async def stream_balance_updates(db_session: DBSession):
+    async def stream_balance_updates(
+        session,
+    ):
         while not shutdown_event.is_set():
-            curr_balance = get_curr_balance(db_session).balance
+            if not session.get("session_id"):
+                await sleep(1)
+                continue
+            curr_balance = get_curr_balance()
             global shown_balance
             if shown_balance != curr_balance.balance:
                 shown_balance = curr_balance.balance
-                yield fh.sse_message(balance_view(GlobalBalanceRead.model_validate(curr_balance)))
+                yield fh.sse_message(balance_view(GlobalBalanceRead.model_validate(curr_balance), session))
             await sleep(1)
 
     # routes
@@ -762,13 +776,15 @@ def modal_get():  # noqa: C901
 
     ## toasts without target
     @f_app.post("/toast")
-    async def toast(session: dict, message: str, type: str) -> fh.Div:
+    async def toast(session, message: str, type: str):
         fh.add_toast(session, message, type)
         return fh.Div(id="toast-container", cls="hidden")
 
     ## pages
     @f_app.get("/")
-    async def home(session: dict, db_session: DBSession = get_db_session()) -> tuple:
+    async def home(
+        session,
+    ):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
         if "csrf_token" not in session:
@@ -779,9 +795,9 @@ def modal_get():  # noqa: C901
             fh.Title(NAME),
             fh.Div(
                 nav(),
-                main_content(session, db_session),
+                main_content(session),
                 toast_container(),
-                footer(db_session),
+                footer(session),
                 cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
             ),
             fh.Script(
@@ -797,7 +813,9 @@ def modal_get():  # noqa: C901
         )
 
     @f_app.get("/developer")
-    def developer(session: dict, db_session: DBSession = get_db_session()) -> tuple:
+    def developer(
+        session,
+    ):
         if "session_id" not in session:
             session["session_id"] = str(uuid.uuid4())
         if "csrf_token" not in session:
@@ -806,9 +824,9 @@ def modal_get():  # noqa: C901
             fh.Title(NAME + " | " + "developer"),
             fh.Div(
                 nav(),
-                developer_page(session, db_session),
+                developer_page(session),
                 toast_container(),
-                footer(db_session),
+                footer(session),
                 cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
             ),
             fh.Script(
@@ -825,16 +843,20 @@ def modal_get():  # noqa: C901
 
     ## SSE streams
     @f_app.get("/stream-gens")
-    async def stream_gens(session: dict, db_session: DBSession = get_db_session()):
-        return fh.EventStream(stream_gen_updates(session, db_session))
+    async def stream_gens(
+        session,
+    ):
+        return fh.EventStream(stream_gen_updates(session))
 
     @f_app.get("/stream-balance")
-    async def stream_balance(db_session: DBSession = get_db_session()):
-        return fh.EventStream(stream_balance_updates(db_session))
+    async def stream_balance(
+        session,
+    ):
+        return fh.EventStream(stream_balance_updates(session))
 
     ## gen form view
     @f_app.get("/get-gen-form/{view}")
-    def get_gen_form(view: str, session: dict) -> tuple:
+    def get_gen_form(view: str, session):
         session["gen_form"] = view
         return (
             (
@@ -899,8 +921,10 @@ def modal_get():  # noqa: C901
     ## generation routes
     @f_app.post("/url")
     def generate_from_url(
-        session: dict, image_url: str, question: str, db_session: DBSession = get_db_session()
-    ) -> tuple:
+        session,
+        image_url: str,
+        question: str,
+    ):
         # validation
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -913,7 +937,7 @@ def modal_get():  # noqa: C901
             return None
 
         # Warn if we're out of balance
-        curr_balance = get_curr_balance(db_session)
+        curr_balance = get_curr_balance()
         if curr_balance.balance < 1:
             fh.add_toast(session, "Out of balance!", "error")
             return None
@@ -938,19 +962,26 @@ def modal_get():  # noqa: C901
             question=question,
             session_id=session["session_id"],
         )
-        generate_and_save(g, session, db_session)
+        g = Gen.model_validate(g)
+        db_session.add(g)
+        db_session.commit()
+        db_session.refresh(g)
+        generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
+        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session)]
         return (
-            gen_view(g_read, session, db_session),
+            gen_view(g_read, session),
             clear_img_input,
             clear_q_input,
-            gen_manage(get_curr_gens(session, db_session), "outerHTML:#gen-manage"),
+            gen_manage(read_gens, "outerHTML:#gen-manage"),
         )
 
     @f_app.post("/upload")
     async def generate_from_upload(
-        session: dict, image_file: fh.UploadFile, question: str, db_session: DBSession
-    ) -> tuple:
+        session,
+        image_file: fh.UploadFile,
+        question: str,
+    ):
         # Check for session ID
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -975,7 +1006,7 @@ def modal_get():  # noqa: C901
             upload_path = res
 
         # Warn if we're out of balance
-        curr_balance = get_curr_balance(db_session)
+        curr_balance = get_curr_balance()
         if curr_balance.balance < 1:
             fh.add_toast(session, "Out of balance!", "error")
             return None
@@ -1000,31 +1031,42 @@ def modal_get():  # noqa: C901
             question=question,
             session_id=session["session_id"],
         )
-        generate_and_save(g, session, db_session)
+        g = Gen.model_validate(g)
+        db_session.add(g)
+        db_session.commit()
+        db_session.refresh(g)
+        generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
+        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session)]
         return (
-            gen_view(g_read, session, db_session),
+            gen_view(g_read, session),
             clear_img_input,
             clear_q_input,
-            gen_manage(get_curr_gens(session, db_session), "outerHTML:#gen-manage"),
+            gen_manage(read_gens, "outerHTML:#gen-manage"),
         )
 
     ## api key request
     @f_app.post("/request-key")
-    def generate_key(session: dict, db_session: DBSession = get_db_session()) -> tuple:
+    def generate_key(
+        session,
+    ):
+        print(session)
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
         k = ApiKeyCreate(session_id=session["session_id"])
         generate_key_and_save(k)
+        print("Generated key:", k.key)
         k_read = ApiKeyRead.model_validate(k)
-        read_keys = [ApiKeyRead.model_validate(k) for k in get_curr_keys(session, db_session)]
-        return key_view(k_read, session, db_session), key_manage(read_keys, "outerHTML:#key-manage")
+        read_keys = [ApiKeyRead.model_validate(k) for k in get_curr_keys(session)]
+        return key_view(k_read, session), key_manage(read_keys, "outerHTML:#key-manage")
 
     ## clear
     @f_app.delete("/gens")
-    def clear_all(session: dict, db_session: DBSession = get_db_session()) -> fh.RedirectResponse:
-        ids = [g.id for g in get_curr_gens(session, db_session)]
+    def clear_all(
+        session,
+    ):
+        ids = [g.id for g in get_curr_gens(session)]
         for id in ids:
             g = db_session.exec(select(Gen).where(Gen.id == id)).first()
             if g and g.image_file and os.path.exists(g.image_file):
@@ -1035,8 +1077,10 @@ def modal_get():  # noqa: C901
         return fh.RedirectResponse("/", status_code=303)
 
     @f_app.delete("/keys")
-    def clear_keys(session: dict, db_session: DBSession = get_db_session()) -> fh.RedirectResponse:
-        ids = [k.id for k in get_curr_keys(session, db_session)]
+    def clear_keys(
+        session,
+    ):
+        ids = [k.id for k in get_curr_keys(session)]
         for id in ids:
             k = db_session.exec(select(ApiKey).where(ApiKey.id == id)).first()
             db_session.delete(k)
@@ -1046,9 +1090,11 @@ def modal_get():  # noqa: C901
 
     ## export to CSV
     @f_app.get("/export-gens")
-    async def export_gens(req, db_session: DBSession = get_db_session()) -> fh.Response:
+    async def export_gens(
+        req,
+    ):
         session = req.session
-        curr_gens = get_curr_gens(session, db_session)
+        curr_gens = get_curr_gens(session)
         if not curr_gens:
             return fh.Response("No generations found.", media_type="text/plain")
 
@@ -1065,9 +1111,11 @@ def modal_get():  # noqa: C901
         return response
 
     @f_app.get("/export-keys")
-    async def export_keys(req, db_session: DBSession = get_db_session()) -> fh.Response:
+    async def export_keys(
+        req,
+    ):
         session = req.session
-        curr_keys = get_curr_keys(session, db_session)
+        curr_keys = get_curr_keys(session)
         if not curr_keys:
             return fh.Response("No keys found.", media_type="text/plain")
 
@@ -1086,7 +1134,7 @@ def modal_get():  # noqa: C901
     ## stripe
     ### send the user here to buy credits
     @f_app.get("/buy_global")
-    def buy_credits(session: dict) -> fh.RedirectResponse:
+    def buy_credits(session):
         if "session_id" not in session:
             return "Error no session id"
 
@@ -1113,17 +1161,19 @@ def modal_get():  # noqa: C901
 
     ### STRIPE sends the USER here after a payment was canceled.
     @f_app.get("/cancel")
-    def cancel() -> fh.RedirectResponse:
+    def cancel():
         return fh.RedirectResponse("/")
 
     ### STRIPE sends the USER here after a payment was 'successful'.
     @f_app.get("/success")
-    def success() -> fh.RedirectResponse:
+    def success():
         return fh.RedirectResponse("/")
 
     ### STRIPE calls this to tell APP when a payment was completed.
     @f_app.post("/webhook")
-    async def stripe_webhook(request, db_session: DBSession = get_db_session()) -> dict:
+    async def stripe_webhook(
+        request,
+    ):
         # print(request)
         # print("Received webhook")
         payload = await request.body()
@@ -1145,7 +1195,7 @@ def modal_get():  # noqa: C901
         if event["type"] == "checkout.session.completed":
             # session = event["data"]["object"]
             # print("Session completed", session)
-            curr_balance = get_curr_balance(db_session)
+            curr_balance = get_curr_balance()
             curr_balance.balance += 50
             db_session.add(curr_balance)
             db_session.commit()

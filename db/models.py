@@ -2,29 +2,17 @@
 
 import datetime
 
-from sqlmodel import Field, SQLModel, create_engine
-from sqlmodel import Session as DBSession
-
-from utils import DB_URI, IN_PROD
-
-engine = create_engine(
-    url=DB_URI,
-    echo=not IN_PROD,
-)
-
-
-def get_db_session() -> DBSession:
-    return DBSession(engine)
+from sqlmodel import Field, SQLModel
 
 
 ### generations
 class GenBase(SQLModel):
-    request_at: datetime.datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
-    image_url: str = None
-    image_file: str = None
-    question: str = None
-    failed: bool = False
-    response: str = None
+    request_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
+    image_url: str | None = None
+    image_file: str | None = None
+    question: str | None = None
+    failed: bool | None = False
+    response: str | None = None
     session_id: str = None
 
 
@@ -37,21 +25,13 @@ class GenCreate(GenBase):
 
 
 class GenRead(GenBase):
-    id: int
-
-
-class GenUpdate(SQLModel):
-    image_url: str = None
-    image_file: str = None
-    question: str = None
-    failed: bool = False
-    response: str = None
+    id: int = None
 
 
 ### api keys
 class ApiKeyBase(SQLModel):
     key: str = None
-    granted_at: datetime.datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
+    granted_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
     session_id: str = None
 
 
@@ -64,12 +44,7 @@ class ApiKeyCreate(ApiKeyBase):
 
 
 class ApiKeyRead(ApiKeyBase):
-    id: int
-
-
-class ApiKeyUpdate(SQLModel):
-    key: str = None
-    granted_at: datetime.datetime = Field(default_factory=datetime.datetime.now(datetime.UTC))
+    id: int = None
 
 
 ### global balance
@@ -89,7 +64,7 @@ class GlobalBalanceCreate(GlobalBalanceBase):
 
 
 class GlobalBalanceRead(GlobalBalanceBase):
-    id: int
+    id: int = None
 
 
 class GlobalBalanceUpdate(SQLModel):

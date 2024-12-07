@@ -60,6 +60,12 @@ Lint and format:
 uv run pre-commit run --all-files
 ```
 
+Pull latest db and migrate (do before running the frontend/api):
+
+```bash
+make migrate <env>
+```
+
 ### Repository Structure
 
 ```bash

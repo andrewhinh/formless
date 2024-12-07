@@ -204,5 +204,9 @@ cython_debug/
 # FastHTML
 .sesskey
 
+# DB
+*.db
+**/versions/
+
 # Training
 **/artifacts/

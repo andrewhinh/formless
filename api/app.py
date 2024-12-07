@@ -3,7 +3,6 @@ from pathlib import Path
 
 import modal
 
-from db.models import ApiKeyCreate, get_db_session
 from utils import (
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
@@ -12,6 +11,7 @@ from utils import (
     IN_PROD,
     MINUTES,
     NAME,
+    REMOTE_DB_URI,
     VOLUME_CONFIG,
     Colors,
 )
@@ -62,17 +62,14 @@ IMAGE = (
         "term-image==0.7.2",
         "fastapi==0.115.6",
         "validators==0.34.0",
+        "sqlmodel==0.0.22",
     )
     .run_function(
         download_model,
         secrets=SECRETS,
         volumes=VOLUME_CONFIG,
     )
-    .copy_local_dir(db_dir_path, "/root/")
-    .run_commands(
-        ["alembic revision --autogenerate -m " + NAME + " --config=/root/db", "alembic upgrade head --config=/root/db"],
-        secrets=SECRETS,
-    )
+    .copy_local_dir(parent_path.parent / "db", "/root/db")
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
@@ -112,19 +109,27 @@ def modal_get():
 
     import requests
     import validators
-    from fastapi import FastAPI, HTTPException, Request, Security
+    from fastapi import Depends, FastAPI, HTTPException, Request, Security
     from fastapi.security import APIKeyHeader
     from PIL import Image, ImageFile
     from sqlmodel import Session as DBSession
-    from sqlmodel import select
+    from sqlmodel import create_engine, select
     from term_image.image import from_file
     from vllm import LLM, SamplingParams
 
-    from db.models import ApiKey
+    from db.models import ApiKey, ApiKeyCreate
 
     ImageFile.LOAD_TRUNCATED_IMAGES = True
 
     f_app = FastAPI()
+    engine = create_engine(
+        url=REMOTE_DB_URI,
+        echo=not IN_PROD,
+    )
+
+    def get_db_session():
+        with DBSession(engine) as session:
+            yield session
 
     llm = LLM(
         model=config["model"],
@@ -136,7 +141,7 @@ def modal_get():
     )
 
     async def verify_api_key(
-        db_session: DBSession = get_db_session(),
+        db_session: DBSession = Depends(get_db_session),
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
         if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
@@ -248,8 +253,8 @@ def modal_get():
         return generated_text
 
     @f_app.post("/api-key")
-    async def apikey(db_session: DBSession = get_db_session()) -> str:
-        k = ApiKeyCreate(key=secrets.token_hex(32))
+    async def apikey(db_session: DBSession = Depends(get_db_session)) -> str:
+        k = ApiKeyCreate(key=secrets.token_hex(16))
         db_session.add(k)
         db_session.commit()
         db_session.refresh(k)
