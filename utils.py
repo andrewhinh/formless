@@ -9,7 +9,6 @@ NAME = "formless"
 DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
 DEFAULT_IMG_PATH = Path(__file__).parent / "api" / "golden-gate-bridge.jpg"
 DEFAULT_QUESTION = "What is the content of this image?"
-FAVICON_PATH = Path(__file__).parent / "favicon.ico"
 
 # Modal
 IN_PROD = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
@@ -39,8 +38,6 @@ GPU_IMAGE = (
     .apt_install("git")  # add system dependencies
     .pip_install(  # add Python dependencies
         "hf_transfer==0.1.6",
-        "alembic==1.14.0",
-        "sqlmodel==0.0.22",
     )
     .env(
         {
@@ -51,7 +48,9 @@ GPU_IMAGE = (
     )
 )
 
-DB_URI = f"sqlite:////{DATA_VOLUME}/main.db"
+DB_NAME = "main.db"
+LOCAL_DB_URI = f"sqlite:///db/migrations/{DB_NAME}"
+REMOTE_DB_URI = f"sqlite:////{DATA_VOLUME}/{DB_NAME}"
 
 
 ## subprocess for Modal
