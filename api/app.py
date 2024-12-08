@@ -4,6 +4,7 @@ from pathlib import Path
 import modal
 
 from utils import (
+    DATA_VOLUME,
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
@@ -105,11 +106,12 @@ def modal_get():
     import secrets
     import tempfile
     import time
+    from contextlib import contextmanager
     from uuid import uuid4
 
     import requests
     import validators
-    from fastapi import Depends, FastAPI, HTTPException, Request, Security
+    from fastapi import FastAPI, HTTPException, Request, Security
     from fastapi.security import APIKeyHeader
     from PIL import Image, ImageFile
     from sqlmodel import Session as DBSession
@@ -127,6 +129,7 @@ def modal_get():
         echo=not IN_PROD,
     )
 
+    @contextmanager
     def get_db_session():
         with DBSession(engine) as session:
             yield session
@@ -141,11 +144,13 @@ def modal_get():
     )
 
     async def verify_api_key(
-        db_session: DBSession = Depends(get_db_session),
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
-        if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
-            return True
+        engine.dispose()
+        VOLUME_CONFIG[f"/{DATA_VOLUME}"].reload()
+        with get_db_session() as db_session:
+            if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
+                return True
         print(f"Invalid API key: {api_key_header}")
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
@@ -261,12 +266,13 @@ def modal_get():
         return generated_text
 
     @f_app.post("/api-key")
-    async def apikey(db_session: DBSession = Depends(get_db_session)) -> str:
+    async def apikey() -> str:
         k = ApiKeyCreate(key=secrets.token_hex(16))
         k = ApiKey.model_validate(k)
-        db_session.add(k)
-        db_session.commit()
-        db_session.refresh(k)
+        with get_db_session() as db_session:
+            db_session.add(k)
+            db_session.commit()
+            db_session.refresh(k)
         return k.key
 
     return f_app
