@@ -60,6 +60,7 @@ def modal_get():  # noqa: C901
     import subprocess
     import uuid
     from asyncio import sleep
+    from contextlib import contextmanager
 
     import requests
     import stripe
@@ -113,31 +114,38 @@ def modal_get():  # noqa: C901
 
     engine = create_engine(
         url=REMOTE_DB_URI,
-        echo=not IN_PROD,
+        # echo=not IN_PROD,
     )
-    db_session = DBSession(engine)
+
+    @contextmanager
+    def get_db_session():
+        with DBSession(engine) as session:
+            yield session
 
     def get_curr_gens(
         session,
     ) -> list[Gen]:
-        return db_session.exec(
-            select(Gen).where(Gen.session_id == session["session_id"]).order_by(Gen.request_at)
-        ).all()
+        with get_db_session() as db_session:
+            return db_session.exec(
+                select(Gen).where(Gen.session_id == session["session_id"]).order_by(Gen.request_at)
+            ).all()
 
     def get_curr_keys(
         session,
     ) -> list[ApiKey]:
-        return db_session.exec(select(ApiKey).where(ApiKey.session_id == session["session_id"])).all()
+        with get_db_session() as db_session:
+            return db_session.exec(select(ApiKey).where(ApiKey.session_id == session["session_id"])).all()
 
     def get_curr_balance() -> GlobalBalance:
-        curr_balance = db_session.get(GlobalBalance, 1)
-        if not curr_balance:
-            new_balance = GlobalBalanceCreate(balance=init_balance)
-            curr_balance = GlobalBalance.model_validate(new_balance)
-            db_session.add(curr_balance)
-            db_session.commit()
-            db_session.refresh(curr_balance)
-        return curr_balance
+        with get_db_session() as db_session:
+            curr_balance = db_session.get(GlobalBalance, 1)
+            if not curr_balance:
+                new_balance = GlobalBalanceCreate(balance=init_balance)
+                curr_balance = GlobalBalance.model_validate(new_balance)
+                db_session.add(curr_balance)
+                db_session.commit()
+                db_session.refresh(curr_balance)
+            return curr_balance
 
     ## stripe
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
@@ -146,6 +154,7 @@ def modal_get():  # noqa: C901
 
     ## SSE state
     shutdown_event = fh.signal_shutdown()
+    global shown_generations
     shown_generations = {}
     global shown_balance
     shown_balance = 0
@@ -177,8 +186,9 @@ def modal_get():  # noqa: C901
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-        if db_session.get(Gen, g.id) is None:
-            return None
+        with get_db_session() as db_session:
+            if db_session.get(Gen, g.id) is None:
+                return None
         if g.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
@@ -268,8 +278,9 @@ def modal_get():  # noqa: C901
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-        if db_session.get(ApiKey, k.id) is None:
-            return None
+        with get_db_session() as db_session:
+            if db_session.get(ApiKey, k.id) is None:
+                return None
         if k.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
@@ -345,8 +356,9 @@ def modal_get():  # noqa: C901
         if "session_id" not in session:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
-        if db_session.get(GlobalBalance, gb.id) is None:
-            return None
+        with get_db_session() as db_session:
+            if db_session.get(GlobalBalance, gb.id) is None:
+                return None
 
         return (
             fh.P("Global balance:"),
@@ -409,7 +421,7 @@ def modal_get():  # noqa: C901
             else None,
             id="gen-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-2/3",
+            cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-full md:w-2/3",
         )
 
     def key_manage(curr_keys: list[ApiKeyRead], hx_swap_oob: bool = "false"):
@@ -439,7 +451,7 @@ def modal_get():  # noqa: C901
             else None,
             id="key-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="flex flex-col md:flex-row justify-center gap-4 w-2/3",
+            cls="flex flex-col md:flex-row justify-center gap-4 w-full md:w-2/3",
         )
 
     ## layout
@@ -534,18 +546,17 @@ def modal_get():  # noqa: C901
                     hx_swap="outerHTML",
                     hx_trigger="load",
                 ),
-                cls="w-2/3 flex flex-col gap-4 justify-center items-center",
+                cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
             gen_manage(read_gens),
             fh.Div(
                 *gen_containers[::-1],
                 id="gen-list",
-                cls="flex flex-col justify-center items-center gap-2 w-2/3",
+                cls="flex flex-col justify-center items-center gap-2 w-full md:w-2/3",
                 style="max-height: 40vh; overflow-y: auto;",
                 hx_ext="sse",
                 sse_connect="/stream-gens",
-                hx_swap="afterbegin",
-                sse_swap="message",
+                sse_swap="UpdateGens",
             ),
             cls="flex flex-col justify-center items-center gap-4 p-8",
             style="max-height: 80vh;",
@@ -565,7 +576,7 @@ def modal_get():  # noqa: C901
                 hx_indicator="#spinner",
                 hx_target="#api-key-table",
                 hx_swap="afterbegin",
-                cls="text-blue-300 hover:text-blue-100 p-2 w-2/3 border-blue-300 border-2 hover:border-blue-100",
+                cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
             key_manage(read_keys),
             fh.Div(
@@ -579,7 +590,7 @@ def modal_get():  # noqa: C901
                     id="api-key-table",
                     style="max-height: 40vh; overflow-y: auto;",
                 ),
-                cls="w-2/3 flex flex-col gap-2 text-sm md:text-lg border-slate-500 border-2",
+                cls="w-full md:w-2/3 flex flex-col gap-2 text-sm md:text-lg border-slate-500 border-2",
             ),
             cls="flex flex-col justify-center items-center gap-4 p-8",
             style="max-height: 80vh;",
@@ -599,8 +610,7 @@ def modal_get():  # noqa: C901
                     cls="flex items-start gap-0.5 md:gap-1",
                     hx_ext="sse",
                     sse_connect="/stream-balance",
-                    hx_swap="innerHTML",
-                    sse_swap="message",
+                    sse_swap="UpdateBalance",
                 ),
                 fh.P(
                     fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
@@ -709,10 +719,11 @@ def modal_get():  # noqa: C901
 
         # TODO: uncomment for debugging
         # g.sqlmodel_update({"response": "temp"})  # have to use sqlmodel_update since object is already committed
-        # db_session.add(g)
-        # db_session.commit()
-        # db_session.refresh(g)
-        # return
+        # with get_db_session() as db_session:
+        #   db_session.add(g)
+        #   db_session.commit()
+        #   db_session.refresh(g)
+        #   return
 
         # TODO: uncomment for debugging
         # response = requests.Response()
@@ -723,9 +734,10 @@ def modal_get():  # noqa: C901
             g.sqlmodel_update({"failed": True})
         else:
             g.sqlmodel_update({"response": response.json()})
-        db_session.add(g)
-        db_session.commit()
-        db_session.refresh(g)
+        with get_db_session() as db_session:
+            db_session.add(g)
+            db_session.commit()
+            db_session.refresh(g)
 
     ## key generation
     def generate_key_and_save(
@@ -733,9 +745,10 @@ def modal_get():  # noqa: C901
     ) -> ApiKey:
         k.key = secrets.token_hex(16)
         k = ApiKey.model_validate(k)
-        db_session.add(k)
-        db_session.commit()
-        db_session.refresh(k)
+        with get_db_session() as db_session:
+            db_session.add(k)
+            db_session.commit()
+            db_session.refresh(k)
         return k
 
     # SSE helpers
@@ -748,12 +761,19 @@ def modal_get():  # noqa: C901
                 continue
             curr_gens = get_curr_gens(session)
             read_gens = [GenRead.model_validate(g) for g in curr_gens]
+
+            global shown_generations
+            inner_content = ""
+            updated = False
+
             for g in read_gens:
                 current_state = "response" if g.response else "failed" if g.failed else "loading"
-                if g.id not in shown_generations or shown_generations[g.id] != current_state:
+                if shown_generations.get(g.id) != current_state:
                     shown_generations[g.id] = current_state
-                    yield fh.sse_message(fh.Script(f"document.getElementById('gen-{g.id}').remove();"))
-                    yield fh.sse_message(gen_view(g, session))
+                    updated = True
+                inner_content += str(gen_view(g, session))
+            if updated:
+                yield fh.sse_message(fh.NotStr(inner_content[::-1]))
             await sleep(1)
 
     async def stream_balance_updates(
@@ -948,9 +968,10 @@ def modal_get():  # noqa: C901
 
         # Decrement balance
         curr_balance.sqlmodel_update({"balance": curr_balance.balance - 1})
-        db_session.add(curr_balance)
-        db_session.commit()
-        db_session.refresh(curr_balance)
+        with get_db_session() as db_session:
+            db_session.add(curr_balance)
+            db_session.commit()
+            db_session.refresh(curr_balance)
 
         # Clear input
         clear_img_input = fh.Input(
@@ -968,9 +989,10 @@ def modal_get():  # noqa: C901
         )
         ## need to put in db since generate_and_save is threaded
         g = Gen.model_validate(g)
-        db_session.add(g)
-        db_session.commit()
-        db_session.refresh(g)
+        with get_db_session() as db_session:
+            db_session.add(g)
+            db_session.commit()
+            db_session.refresh(g)
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
         read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session)]
@@ -1008,9 +1030,10 @@ def modal_get():  # noqa: C901
             return None
 
         curr_balance.sqlmodel_update({"balance": curr_balance.balance - 1})
-        db_session.add(curr_balance)
-        db_session.commit()
-        db_session.refresh(curr_balance)
+        with get_db_session() as db_session:
+            db_session.add(curr_balance)
+            db_session.commit()
+            db_session.refresh(curr_balance)
 
         # Clear input
         clear_img_input = fh.Input(
@@ -1028,9 +1051,10 @@ def modal_get():  # noqa: C901
         )
         ## need to put in db since generate_and_save is threaded
         g = Gen.model_validate(g)
-        db_session.add(g)
-        db_session.commit()
-        db_session.refresh(g)
+        with get_db_session() as db_session:
+            db_session.add(g)
+            db_session.commit()
+            db_session.refresh(g)
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
         read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session)]
@@ -1064,8 +1088,9 @@ def modal_get():  # noqa: C901
         for g in gens:
             if g and g.image_file and os.path.exists(g.image_file):
                 os.remove(g.image_file)
-            db_session.delete(g)
-            db_session.commit()
+            with get_db_session() as db_session:
+                db_session.delete(g)
+                db_session.commit()
         fh.add_toast(session, "Deleted generations and image files.", "success")
         return fh.RedirectResponse("/", status_code=303)
 
@@ -1075,8 +1100,9 @@ def modal_get():  # noqa: C901
     ):
         keys = get_curr_keys(session)
         for k in keys:
-            db_session.delete(k)
-            db_session.commit()
+            with get_db_session() as db_session:
+                db_session.delete(k)
+                db_session.commit()
         fh.add_toast(session, "Deleted keys.", "success")
         return fh.RedirectResponse("/developer", status_code=303)
 
@@ -1189,9 +1215,10 @@ def modal_get():  # noqa: C901
             # print("Session completed", session)
             curr_balance = get_curr_balance()
             curr_balance.sqlmodel_update({"balance": curr_balance.balance + 50})
-            db_session.add(curr_balance)
-            db_session.commit()
-            db_session.refresh(curr_balance)
+            with get_db_session() as db_session:
+                db_session.add(curr_balance)
+                db_session.commit()
+                db_session.refresh(curr_balance)
             return {"status": "success"}, 200
 
     return f_app
