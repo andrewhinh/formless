@@ -86,8 +86,49 @@ def modal_get():  # noqa: C901
     )
 
     # setup
+    def before(req, sess):
+        req.scope["session_id"] = sess.setdefault("session_id", str(uuid.uuid4()))
+        req.scope["csrf_token"] = sess.setdefault("csrf_token", secrets.token_hex(32))
+        req.scope["gen_form"] = sess.setdefault("gen_form", "image-url")
+
+    def _not_found(req, exc):
+        message = "Page not found!"
+        typing_steps = len(message)
+        return (
+            fh.Title(NAME + " | 404"),
+            fh.Div(
+                nav(),
+                fh.Titled(
+                    fh.P(
+                        message,
+                        hx_indicator="#spinner",
+                        cls="text-2xl text-red-300 animate-typing overflow-hidden whitespace-nowrap border-r-4 border-red-300",
+                        style=f"animation: typing 2s steps({typing_steps}, end), blink-caret .75s step-end infinite",
+                    ),
+                    cls="flex flex-col justify-center items-center gap-4 p-8",
+                ),
+                toast_container(),
+                footer(),
+                cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+            ),
+            fh.Style(
+                """
+            @keyframes typing {
+                from { width: 0; }
+                to { width: 100%; }
+            }
+            @keyframes blink-caret {
+                from, to { border-color: transparent; }
+                50% { border-color: red; }
+            }
+            """
+            ),
+        )
+
     f_app, _ = fh.fast_app(
         ws_hdr=True,
+        before=fh.Beforeware(before, skip=[r"/favicon\.ico", r"/static/.*", r".*\.css"]),
+        exception_handlers={404: _not_found},
         hdrs=[
             fh.Script(src="https://cdn.tailwindcss.com"),
             fh.HighlightJS(langs=["python", "javascript", "html", "css"]),
@@ -123,18 +164,16 @@ def modal_get():  # noqa: C901
             yield session
 
     def get_curr_gens(
-        session,
+        session_id,
     ) -> list[Gen]:
         with get_db_session() as db_session:
-            return db_session.exec(
-                select(Gen).where(Gen.session_id == session["session_id"]).order_by(Gen.request_at)
-            ).all()
+            return db_session.exec(select(Gen).where(Gen.session_id == session_id).order_by(Gen.request_at)).all()
 
     def get_curr_keys(
-        session,
+        session_id,
     ) -> list[ApiKey]:
         with get_db_session() as db_session:
-            return db_session.exec(select(ApiKey).where(ApiKey.session_id == session["session_id"])).all()
+            return db_session.exec(select(ApiKey).where(ApiKey.session_id == session_id)).all()
 
     def get_curr_balance() -> GlobalBalance:
         with get_db_session() as db_session:
@@ -182,12 +221,10 @@ def modal_get():  # noqa: C901
         g: GenRead,
         session,
     ):
-        ### check if g and session are valid
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
+        ### check if g is valid
         with get_db_session() as db_session:
             if db_session.get(Gen, g.id) is None:
+                fh.add_toast(session, "Please refresh the page", "error")
                 return None
         if g.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
@@ -275,9 +312,6 @@ def modal_get():  # noqa: C901
         k: ApiKeyRead,
         session,
     ):
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
         with get_db_session() as db_session:
             if db_session.get(ApiKey, k.id) is None:
                 return None
@@ -351,11 +385,7 @@ def modal_get():  # noqa: C901
 
     def balance_view(
         gb: GlobalBalanceRead,
-        session,
     ):
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
         with get_db_session() as db_session:
             if db_session.get(GlobalBalance, gb.id) is None:
                 return None
@@ -532,7 +562,7 @@ def modal_get():  # noqa: C901
         session,
     ):
         curr_gen_form = session["gen_form"]
-        curr_gens = get_curr_gens(session)
+        curr_gens = get_curr_gens(session["session_id"])
         read_gens = [GenRead.model_validate(g) for g in curr_gens]
         gen_containers = [gen_view(g, session) for g in read_gens]
         return fh.Main(
@@ -565,7 +595,7 @@ def modal_get():  # noqa: C901
     def developer_page(
         session,
     ):
-        curr_keys = get_curr_keys(session)
+        curr_keys = get_curr_keys(session["session_id"])
         read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
         key_containers = [key_view(k, session) for k in read_keys]
         return fh.Main(
@@ -599,13 +629,11 @@ def modal_get():  # noqa: C901
     def toast_container():
         return fh.Div(id="toast-container", cls="hidden")
 
-    def footer(
-        session,
-    ):
+    def footer():
         return fh.Footer(
             fh.Div(
                 fh.Div(
-                    balance_view(GlobalBalanceRead.model_validate(get_curr_balance()), session),
+                    balance_view(GlobalBalanceRead.model_validate(get_curr_balance())),
                     id="balance",
                     cls="flex items-start gap-0.5 md:gap-1",
                     hx_ext="sse",
@@ -756,10 +784,7 @@ def modal_get():  # noqa: C901
         session,
     ):
         while not shutdown_event.is_set():
-            if not session.get("session_id"):  # since called slightly before session is set
-                await sleep(1)
-                continue
-            curr_gens = get_curr_gens(session)
+            curr_gens = get_curr_gens(session["session_id"])
             read_gens = [GenRead.model_validate(g) for g in curr_gens]
 
             global shown_generations
@@ -776,18 +801,13 @@ def modal_get():  # noqa: C901
                 yield fh.sse_message(fh.NotStr(inner_content[::-1]))
             await sleep(1)
 
-    async def stream_balance_updates(
-        session,
-    ):
+    async def stream_balance_updates():
         while not shutdown_event.is_set():
-            if not session.get("session_id"):  # since called slightly before session is set
-                await sleep(1)
-                continue
             curr_balance = get_curr_balance()
             global shown_balance
             if shown_balance != curr_balance.balance:
                 shown_balance = curr_balance.balance
-                yield fh.sse_message(balance_view(GlobalBalanceRead.model_validate(curr_balance), session))
+                yield fh.sse_message(balance_view(GlobalBalanceRead.model_validate(curr_balance)))
             await sleep(1)
 
     # routes
@@ -809,19 +829,13 @@ def modal_get():  # noqa: C901
     async def home(
         session,
     ):
-        if "session_id" not in session:
-            session["session_id"] = str(uuid.uuid4())
-        if "csrf_token" not in session:
-            session["csrf_token"] = secrets.token_hex(32)
-        if "gen_form" not in session:
-            session["gen_form"] = "image-url"
         return (
             fh.Title(NAME),
             fh.Div(
                 nav(),
                 main_content(session),
                 toast_container(),
-                footer(session),
+                footer(),
                 cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
             ),
             fh.Script(
@@ -840,17 +854,13 @@ def modal_get():  # noqa: C901
     def developer(
         session,
     ):
-        if "session_id" not in session:
-            session["session_id"] = str(uuid.uuid4())
-        if "csrf_token" not in session:
-            session["csrf_token"] = secrets.token_hex(32)
         return (
             fh.Title(NAME + " | " + "developer"),
             fh.Div(
                 nav(),
                 developer_page(session),
                 toast_container(),
-                footer(session),
+                footer(),
                 cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
             ),
             fh.Script(
@@ -873,10 +883,8 @@ def modal_get():  # noqa: C901
         return fh.EventStream(stream_gen_updates(session))
 
     @f_app.get("/stream-balance")
-    async def stream_balance(
-        session,
-    ):
-        return fh.EventStream(stream_balance_updates(session))
+    async def stream_balance():
+        return fh.EventStream(stream_balance_updates())
 
     ## gen form view
     @f_app.get("/get-gen-form/{view}")
@@ -950,9 +958,6 @@ def modal_get():  # noqa: C901
         question: str,
     ):
         # validation
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
         if not image_url:
             fh.add_toast(session, "No image URL provided", "error")
             return None
@@ -995,7 +1000,7 @@ def modal_get():  # noqa: C901
             db_session.refresh(g)
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
-        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session)]
+        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session["session_id"])]
         return (
             gen_view(g_read, session),
             clear_img_input,
@@ -1009,12 +1014,6 @@ def modal_get():  # noqa: C901
         image_file: fh.UploadFile,
         question: str,
     ):
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
-        if "csrf_token" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
         if not image_file:
             fh.add_toast(session, "No image uploaded", "error")
             return None
@@ -1057,7 +1056,7 @@ def modal_get():  # noqa: C901
             db_session.refresh(g)
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
-        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session)]
+        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session["session_id"])]
         return (
             gen_view(g_read, session),
             clear_img_input,
@@ -1070,13 +1069,10 @@ def modal_get():  # noqa: C901
     def generate_key(
         session,
     ):
-        if "session_id" not in session:
-            fh.add_toast(session, "Please refresh the page", "error")
-            return None
         k = ApiKeyCreate(session_id=session["session_id"])
         k = generate_key_and_save(k)
         k_read = ApiKeyRead.model_validate(k)
-        read_keys = [ApiKeyRead.model_validate(k) for k in get_curr_keys(session)]
+        read_keys = [ApiKeyRead.model_validate(k) for k in get_curr_keys(session["session_id"])]
         return key_view(k_read, session), key_manage(read_keys, "outerHTML:#key-manage")
 
     ## clear
@@ -1084,7 +1080,7 @@ def modal_get():  # noqa: C901
     def clear_all(
         session,
     ):
-        gens = get_curr_gens(session)
+        gens = get_curr_gens(session["session_id"])
         for g in gens:
             if g and g.image_file and os.path.exists(g.image_file):
                 os.remove(g.image_file)
@@ -1098,7 +1094,7 @@ def modal_get():  # noqa: C901
     def clear_keys(
         session,
     ):
-        keys = get_curr_keys(session)
+        keys = get_curr_keys(session["session_id"])
         for k in keys:
             with get_db_session() as db_session:
                 db_session.delete(k)
@@ -1112,7 +1108,7 @@ def modal_get():  # noqa: C901
         req,
     ):
         session = req.session
-        curr_gens = get_curr_gens(session)
+        curr_gens = get_curr_gens(session["session_id"])
         if not curr_gens:
             return fh.Response("No generations found.", media_type="text/plain")
 
@@ -1133,7 +1129,7 @@ def modal_get():  # noqa: C901
         req,
     ):
         session = req.session
-        curr_keys = get_curr_keys(session)
+        curr_keys = get_curr_keys(session["session_id"])
         if not curr_keys:
             return fh.Response("No keys found.", media_type="text/plain")
 
@@ -1152,10 +1148,7 @@ def modal_get():  # noqa: C901
     ## stripe
     ### send the user here to buy credits
     @f_app.get("/buy_global")
-    def buy_credits(session):
-        if "session_id" not in session:
-            return "Error no session id"
-
+    def buy_credits():
         s = stripe.checkout.Session.create(
             payment_method_types=["card"],
             line_items=[
