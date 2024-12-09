@@ -165,15 +165,27 @@ def modal_get():  # noqa: C901
 
     def get_curr_gens(
         session_id,
+        number: int = None,
+        offset: int = 0,
     ) -> list[Gen]:
         with get_db_session() as db_session:
-            return db_session.exec(select(Gen).where(Gen.session_id == session_id).order_by(Gen.request_at)).all()
+            query = select(Gen).where(Gen.session_id == session_id).order_by(Gen.request_at.desc()).offset(offset)
+            if number:
+                query = query.limit(number)
+            return db_session.exec(query).all()
 
     def get_curr_keys(
         session_id,
+        number: int = None,
+        offset: int = 0,
     ) -> list[ApiKey]:
         with get_db_session() as db_session:
-            return db_session.exec(select(ApiKey).where(ApiKey.session_id == session_id)).all()
+            query = (
+                select(ApiKey).where(ApiKey.session_id == session_id).order_by(ApiKey.granted_at.desc()).offset(offset)
+            )
+            if number:
+                query = query.limit(number)
+            return db_session.exec(query).all()
 
     def get_curr_balance() -> GlobalBalance:
         with get_db_session() as db_session:
@@ -197,6 +209,10 @@ def modal_get():  # noqa: C901
     shown_generations = {}
     global shown_balance
     shown_balance = 0
+
+    ## pagination
+    max_gens = 10
+    max_keys = 20
 
     # ui
     ## components
@@ -239,43 +255,61 @@ def modal_get():  # noqa: C901
                 f.write(open(g.image_file, "rb").read())
             image_src = f"/{Path(g.image_file).name}"
 
+        limit_chars = 100
         if g.failed:
             return fh.Card(
-                fh.Img(
-                    src=image_src,
-                    alt="Card image",
-                    cls="w-20 object-contain",
+                fh.Div(
+                    fh.Img(
+                        src=image_src,
+                        alt="Card image",
+                        cls="max-h-48 w-full object-contain",
+                    ),
+                    cls="w-1/2",
                 ),
                 fh.Div(
                     fh.P(
-                        g.question,
-                        cls="text-blue-300",
+                        g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
+                        onclick=f"navigator.clipboard.writeText('{g.question}');",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_indicator="#spinner",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
+                        title="Click to copy",
                     ),
                     fh.P(
                         "Generation failed",
-                        cls="text-red-300 ",
+                        cls="text-red-300",
                     ),
-                    cls="flex flex-col gap-2",
+                    cls="max-h-48 w-1/2 flex flex-col gap-2",
                 ),
-                cls="w-full flex gap-4",
-                style="max-height: 40vh;",
+                cls="max-h-60 w-full flex justify-between gap-4",
                 id=f"gen-{g.id}",
             )
         elif g.response:
             return fh.Card(
-                fh.Img(
-                    src=image_src,
-                    alt="Card image",
-                    cls="w-20 object-contain",
+                fh.Div(
+                    fh.Img(
+                        src=image_src,
+                        alt="Card image",
+                        cls="max-h-48 w-full object-contain",
+                    ),
+                    cls="w-1/2",
                 ),
                 fh.Div(
                     fh.P(
-                        g.question,
-                        cls="text-blue-300",
+                        g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
+                        onclick=f"navigator.clipboard.writeText('{g.question}');",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_indicator="#spinner",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
+                        title="Click to copy",
                     ),
                     fh.P(
-                        g.response,
-                        onclick="navigator.clipboard.writeText(this.innerText);",
+                        g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
+                        onclick=f"navigator.clipboard.writeText('{g.response}');",
                         hx_post="/toast?message=Copied to clipboard!&type=success",
                         hx_indicator="#spinner",
                         hx_target="#toast-container",
@@ -283,28 +317,35 @@ def modal_get():  # noqa: C901
                         cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
                         title="Click to copy",
                     ),
-                    cls="flex flex-col gap-2",
+                    cls="max-h-48 w-1/2 flex flex-col gap-2",
                 ),
-                cls="w-full flex gap-4",
-                style="max-height: 40vh; overflow-y: auto;",
+                cls="max-h-60 w-full flex justify-between gap-4",
                 id=f"gen-{g.id}",
             )
         return fh.Card(
-            fh.Img(
-                src=image_src,
-                alt="Card image",
-                cls="w-20 object-contain",
+            fh.Div(
+                fh.Img(
+                    src=image_src,
+                    alt="Card image",
+                    cls="max-h-48 w-full object-contain",
+                ),
+                cls="w-1/2",
             ),
             fh.Div(
                 fh.P(
-                    g.question,
-                    cls="text-blue-300",
+                    g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
+                    onclick=f"navigator.clipboard.writeText('{g.question}');",
+                    hx_post="/toast?message=Copied to clipboard!&type=success",
+                    hx_indicator="#spinner",
+                    hx_target="#toast-container",
+                    hx_swap="outerHTML",
+                    cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
+                    title="Click to copy",
                 ),
                 fh.P("Scanning image ..."),
-                cls="flex flex-col gap-2",
+                cls="max-h-48 w-1/2 flex flex-col gap-2",
             ),
-            cls="w-full flex gap-4",
-            style="max-height: 40vh;",
+            cls="max-h-60 w-full flex justify-between gap-4",
             id=f"gen-{g.id}",
         )
 
@@ -403,7 +444,7 @@ def modal_get():  # noqa: C901
                 cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
                 if gen_form == "image-url"
                 else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                hx_get="/get-gen-form/image-url",
+                hx_get="/get-gen-form?view=image-url",
                 hx_indicator="#spinner",
                 hx_target="#gen-form",
                 hx_swap="innerHTML",
@@ -414,7 +455,7 @@ def modal_get():  # noqa: C901
                 cls="w-full h-full text-blue-100 bg-blue-500 p-2 border-blue-500 border-2"
                 if gen_form == "image-upload"
                 else "w-full h-full text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                hx_get="/get-gen-form/image-upload",
+                hx_get="/get-gen-form?view=image-upload",
                 hx_indicator="#spinner",
                 hx_target="#gen-form",
                 hx_swap="innerHTML",
@@ -424,7 +465,7 @@ def modal_get():  # noqa: C901
             cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
         )
 
-    def gen_manage(curr_gens: list[GenRead], hx_swap_oob: bool = "false"):
+    def gen_manage(gens_present: bool, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Clear all",
@@ -435,7 +476,7 @@ def modal_get():  # noqa: C901
                 hx_confirm="Are you sure?",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
-            if curr_gens
+            if gens_present
             else None,
             fh.Button(
                 "Export to CSV",
@@ -447,14 +488,14 @@ def modal_get():  # noqa: C901
                 hx_boost="false",
                 cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
-            if curr_gens
+            if gens_present
             else None,
             id="gen-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
             cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-full md:w-2/3",
         )
 
-    def key_manage(curr_keys: list[ApiKeyRead], hx_swap_oob: bool = "false"):
+    def key_manage(keys_present: bool, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Clear all",
@@ -465,7 +506,7 @@ def modal_get():  # noqa: C901
                 hx_confirm="Are you sure?",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
-            if curr_keys
+            if keys_present
             else None,
             fh.Button(
                 "Export to CSV",
@@ -477,11 +518,45 @@ def modal_get():  # noqa: C901
                 hx_boost="false",
                 cls="text-green-300 hover:text-green-100 p-2 border-green-300 border-2 hover:border-green-100 w-full h-full",
             )
-            if curr_keys
+            if keys_present
             else None,
             id="key-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
             cls="flex flex-col md:flex-row justify-center gap-4 w-full md:w-2/3",
+        )
+
+    def gen_load_more(gens_present: bool, still_more: bool, idx: int = 2, hx_swap_oob: bool = "false"):
+        return fh.Div(
+            fh.Button(
+                "Load More",
+                hx_get=f"/page-gens?idx={idx}",
+                hx_indicator="#spinner",
+                hx_target="#gen-list",
+                hx_swap="beforeend",
+                cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100 w-full h-full",
+            )
+            if gens_present and still_more
+            else None,
+            id="load-more-gens",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="w-full md:w-2/3",
+        )
+
+    def key_load_more(keys_present: bool, still_more: bool, idx: int = 2, hx_swap_oob: bool = "false"):
+        return fh.Div(
+            fh.Button(
+                "Load More",
+                hx_get=f"/page-keys?idx={idx}",
+                hx_indicator="#spinner",
+                hx_target="#api-key-table",
+                hx_swap="beforeend",
+                cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100 w-full h-full",
+            )
+            if keys_present and still_more
+            else None,
+            id="load-more-keys",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="w-full md:w-2/3",
         )
 
     ## layout
@@ -555,22 +630,19 @@ def modal_get():  # noqa: C901
                 cls="flex flex-col items-end md:flex-row md:items-center gap-2 md:gap-8",
             ),
             cls="flex justify-between p-4 relative",
-            style="max-height: 10vh;",
         )
 
     def main_content(
         session,
     ):
         curr_gen_form = session["gen_form"]
-        curr_gens = get_curr_gens(session["session_id"])
-        read_gens = [GenRead.model_validate(g) for g in curr_gens]
-        gen_containers = [gen_view(g, session) for g in read_gens]
+        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return fh.Main(
             fh.Div(
                 gen_form_toggle(curr_gen_form),
                 fh.Div(
                     id="gen-form",
-                    hx_get="/get-gen-form/" + curr_gen_form,
+                    hx_get=f"/get-gen-form?view={curr_gen_form}",
                     hx_indicator="#spinner",
                     hx_target="#gen-form",
                     hx_swap="outerHTML",
@@ -578,26 +650,25 @@ def modal_get():  # noqa: C901
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
-            gen_manage(read_gens),
+            gen_manage(gens_present),
             fh.Div(
-                *gen_containers[::-1],
+                get_gen_table_part(session),
                 id="gen-list",
                 cls="flex flex-col justify-center items-center gap-2 w-full md:w-2/3",
-                style="max-height: 40vh; overflow-y: auto;",
                 hx_ext="sse",
                 sse_connect="/stream-gens",
                 sse_swap="UpdateGens",
             ),
-            cls="flex flex-col justify-center items-center gap-4 p-8",
-            style="max-height: 80vh;",
+            gen_load_more(
+                gens_present, len(get_curr_gens(session["session_id"], number=max_gens, offset=max_gens)) > 0
+            ),
+            cls="flex flex-col justify-start items-center grow gap-4 p-8",
         )
 
     def developer_page(
         session,
     ):
-        curr_keys = get_curr_keys(session["session_id"])
-        read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
-        key_containers = [key_view(k, session) for k in read_keys]
+        keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return fh.Main(
             fh.Button(
                 "Request New Key",
@@ -608,7 +679,7 @@ def modal_get():  # noqa: C901
                 hx_swap="afterbegin",
                 cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
-            key_manage(read_keys),
+            key_manage(keys_present),
             fh.Div(
                 fh.Div(
                     fh.Div("Key", cls="font-bold w-2/3"),
@@ -616,14 +687,15 @@ def modal_get():  # noqa: C901
                     cls="flex p-2",
                 ),
                 fh.Div(
-                    *key_containers[::-1],
+                    get_key_table_part(session),
                     id="api-key-table",
-                    style="max-height: 40vh; overflow-y: auto;",
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-2 text-sm md:text-lg border-slate-500 border-2",
             ),
-            cls="flex flex-col justify-center items-center gap-4 p-8",
-            style="max-height: 80vh;",
+            key_load_more(
+                keys_present, len(get_curr_keys(session["session_id"], number=max_keys, offset=max_keys)) > 0
+            ),
+            cls="flex flex-col justify-start items-center grow gap-4 p-8",
         )
 
     def toast_container():
@@ -656,7 +728,6 @@ def modal_get():  # noqa: C901
                 cls="flex flex-col text-right gap-0.5",
             ),
             cls="flex justify-between p-4 text-sm md:text-lg",
-            style="max-height: 10vh;",
         )
 
     # helper fns
@@ -728,6 +799,22 @@ def modal_get():  # noqa: C901
         k = ApiKeyCreate(session_id=session["session_id"])
         k = generate_key_and_save(k)
 
+        # TODO: uncomment for debugging
+        # g.sqlmodel_update({"response": "temp"})  # have to use sqlmodel_update since object is already committed
+        # with get_db_session() as db_session:
+        #     db_session.add(g)
+        #     db_session.commit()
+        #     db_session.refresh(g)
+        #     return
+
+        # TODO: uncomment for debugging
+        # g.sqlmodel_update({"failed": True})
+        # with get_db_session() as db_session:
+        #     db_session.add(g)
+        #     db_session.commit()
+        #     db_session.refresh(g)
+        #     return
+
         if g.image_url:
             response = requests.post(
                 os.getenv("API_URL"),
@@ -745,18 +832,6 @@ def modal_get():  # noqa: C901
                 },
             )
 
-        # TODO: uncomment for debugging
-        # g.sqlmodel_update({"response": "temp"})  # have to use sqlmodel_update since object is already committed
-        # with get_db_session() as db_session:
-        #   db_session.add(g)
-        #   db_session.commit()
-        #   db_session.refresh(g)
-        #   return
-
-        # TODO: uncomment for debugging
-        # response = requests.Response()
-        # response.status_code = 500
-
         if not response.ok:
             fh.add_toast(session, "Failed with status code: " + str(response.status_code), "error")
             g.sqlmodel_update({"failed": True})
@@ -767,7 +842,6 @@ def modal_get():  # noqa: C901
             db_session.commit()
             db_session.refresh(g)
 
-    ## key generation
     def generate_key_and_save(
         k: ApiKeyCreate,
     ) -> ApiKey:
@@ -779,18 +853,20 @@ def modal_get():  # noqa: C901
             db_session.refresh(k)
         return k
 
-    # SSE helpers
+    ## SSE helpers
     async def stream_gen_updates(
         session,
     ):
         while not shutdown_event.is_set():
-            curr_gens = get_curr_gens(session["session_id"])
-            read_gens = [GenRead.model_validate(g) for g in curr_gens]
-
             global shown_generations
+            shown_ids = list(shown_generations.keys())
+            if not shown_ids:
+                yield fh.sse_message(get_gen_table_part(session))
+
+            curr_gens = get_curr_gens(session["session_id"], number=len(shown_ids), offset=min(shown_ids, default=0))
+            read_gens = [GenRead.model_validate(g) for g in curr_gens]
             inner_content = ""
             updated = False
-
             for g in read_gens:
                 current_state = "response" if g.response else "failed" if g.failed else "loading"
                 if shown_generations.get(g.id) != current_state:
@@ -809,6 +885,19 @@ def modal_get():  # noqa: C901
                 shown_balance = curr_balance.balance
                 yield fh.sse_message(balance_view(GlobalBalanceRead.model_validate(curr_balance)))
             await sleep(1)
+
+    ## pagination
+    def get_gen_table_part(session, part_num: int = 1, size: int = max_gens):
+        curr_gens = get_curr_gens(session["session_id"], number=size, offset=(part_num - 1) * size)
+        read_gens = [GenRead.model_validate(g) for g in curr_gens]
+        paginated = [gen_view(g, session) for g in read_gens]
+        return tuple(paginated)
+
+    def get_key_table_part(session, part_num: int = 1, size: int = max_keys):
+        curr_keys = get_curr_keys(session["session_id"], number=size, offset=(part_num - 1) * size)
+        read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
+        paginated = [key_view(k, session) for k in read_keys]
+        return tuple(paginated)
 
     # routes
     ## for images, CSS, etc.
@@ -887,8 +976,8 @@ def modal_get():  # noqa: C901
         return fh.EventStream(stream_balance_updates())
 
     ## gen form view
-    @f_app.get("/get-gen-form/{view}")
-    def get_gen_form(view: str, session):
+    @f_app.get("/get-gen-form")
+    def get_gen_form(session, view: str):
         session["gen_form"] = view
         return (
             (
@@ -958,7 +1047,7 @@ def modal_get():  # noqa: C901
                     cls="w-full h-full",
                 ),
             ),
-            gen_form_toggle(view, "outerHTML:#gen-form-toggle"),
+            gen_form_toggle(view, "true"),
         )
 
     ## input validation
@@ -988,6 +1077,25 @@ def modal_get():  # noqa: C901
         if isinstance(res, str):
             fh.add_toast(session, res, "error")
         return fh.Div(cls="hidden")
+
+    ## pagination
+    @f_app.get("/page-gens")
+    def page_gens(session, idx: int):
+        return get_gen_table_part(session, idx), gen_load_more(
+            bool(get_curr_gens(session["session_id"], number=1)),
+            len(get_curr_gens(session["session_id"], number=max_gens, offset=max_gens * (idx + 1))) > 0,
+            idx + 1,
+            "true",
+        )
+
+    @f_app.get("/page-keys")
+    def page_keys(session, idx: int):
+        return get_key_table_part(session, idx), key_load_more(
+            bool(get_curr_keys(session["session_id"], number=1)),
+            len(get_curr_keys(session["session_id"], number=max_keys, offset=max_keys * (idx + 1))) > 0,
+            idx + 1,
+            "true",
+        )
 
     ## generation routes
     @f_app.post("/url")
@@ -1039,12 +1147,17 @@ def modal_get():  # noqa: C901
             db_session.refresh(g)
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
-        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session["session_id"])]
+        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return (
             gen_view(g_read, session),
             clear_img_input,
             clear_q_input,
-            gen_manage(read_gens, "outerHTML:#gen-manage"),
+            gen_manage(gens_present, "true"),
+            gen_load_more(
+                gens_present,
+                False,  # TODO: fix pagination when new results are added
+                hx_swap_oob="true",
+            ),
         )
 
     @f_app.post("/upload")
@@ -1095,12 +1208,17 @@ def modal_get():  # noqa: C901
             db_session.refresh(g)
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
-        read_gens = [GenRead.model_validate(g) for g in get_curr_gens(session["session_id"])]
+        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return (
             gen_view(g_read, session),
             clear_img_input,
             clear_q_input,
-            gen_manage(read_gens, "outerHTML:#gen-manage"),
+            gen_manage(gens_present, "true"),
+            gen_load_more(
+                gens_present,
+                False,
+                hx_swap_oob="true",
+            ),
         )
 
     ## api key request
@@ -1111,8 +1229,19 @@ def modal_get():  # noqa: C901
         k = ApiKeyCreate(session_id=session["session_id"])
         k = generate_key_and_save(k)
         k_read = ApiKeyRead.model_validate(k)
-        read_keys = [ApiKeyRead.model_validate(k) for k in get_curr_keys(session["session_id"])]
-        return key_view(k_read, session), key_manage(read_keys, "outerHTML:#key-manage")
+        keys_present = bool(get_curr_keys(session["session_id"], number=1))
+        return (
+            key_view(k_read, session),
+            key_manage(
+                keys_present,
+                "true",
+            ),
+            key_load_more(
+                keys_present,
+                False,
+                hx_swap_oob="true",
+            ),
+        )
 
     ## clear
     @f_app.delete("/gens")
@@ -1260,9 +1389,6 @@ def modal_get():  # noqa: C901
 # - add gens/keys counts: https://hypermedia.systems/more-htmx-patterns/#_lazy_loading
 # - add granular delete: https://hypermedia.systems/more-htmx-patterns/#_inline_delete
 # - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
-# - add better infinite scroll:
-#   - https://github.com/AnswerDotAI/FastHTML-Gallery/blob/main/examples/dynamic_user_interface/infinite_scroll/app.py
-#   - https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 
 # - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
