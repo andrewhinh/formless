@@ -37,11 +37,10 @@ def run() -> None:
     else:
         response = requests.post(
             f"{API_URL}/upload",
-            data=open(image_path, "rb").read(),
+            files={"image": open(image_path, "rb")},
+            data={"question": question},
             headers={
                 "X-API-Key": api_key,
-                "Content-Type": "application/octet-stream",
-                "question": question,
             },
         )
     assert response.ok, response.status_code

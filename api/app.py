@@ -65,6 +65,7 @@ IMAGE = (
         "validators==0.34.0",
         "sqlmodel==0.0.22",
     )
+    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
     .run_function(
         download_model,
         secrets=SECRETS,
@@ -100,10 +101,10 @@ app = modal.App(name=APP_NAME)
     allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
 )
 @modal.asgi_app()
-def modal_get():
-    import io
+def modal_get():  # noqa: C901
     import os
     import secrets
+    import subprocess
     import tempfile
     import time
     from contextlib import contextmanager
@@ -111,9 +112,10 @@ def modal_get():
 
     import requests
     import validators
-    from fastapi import FastAPI, HTTPException, Request, Security
+    from fastapi import FastAPI, Form, HTTPException, Security, UploadFile
     from fastapi.security import APIKeyHeader
     from PIL import Image, ImageFile
+    from pydantic import BaseModel
     from sqlmodel import Session as DBSession
     from sqlmodel import create_engine, select
     from term_image.image import from_file
@@ -121,13 +123,15 @@ def modal_get():
 
     from db.models import ApiKey, ApiKeyCreate
 
-    ImageFile.LOAD_TRUNCATED_IMAGES = True
-
+    ## setup
     f_app = FastAPI()
     engine = create_engine(
         url=REMOTE_DB_URI,
         echo=not IN_PROD,
     )
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+    upload_dir = Path(f"/{DATA_VOLUME}/uploads")
+    upload_dir.mkdir(exist_ok=True)
 
     @contextmanager
     def get_db_session():
@@ -143,6 +147,8 @@ def modal_get():
         tensor_parallel_size=GPU_COUNT,
     )
 
+    ## helpers
+
     async def verify_api_key(
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
@@ -154,56 +160,61 @@ def modal_get():
         print(f"Invalid API key: {api_key_header}")
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
+    class UrlInput(BaseModel):
+        image_url: str
+        question: str = DEFAULT_QUESTION
+
+    ## main
+
     @f_app.post("/")
-    async def main(
-        image_url: str = DEFAULT_IMG_URL, question: str = DEFAULT_QUESTION, api_key: bool = Security(verify_api_key)
-    ) -> str:
+    async def main(input_data: UrlInput, api_key: bool = Security(verify_api_key)) -> str:
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        if not validators.url(image_url):
-            print(f"Invalid request {request_id}: img_url={image_url}, question={question}")
+        image_url = input_data.image_url
+        question = input_data.question
+
+        ## validate
+        if not image_url or not validators.url(image_url):
+            print(f"Invalid image URL: {image_url}")
             raise HTTPException(status_code=400, detail="Invalid image URL")
-
         response = requests.get(image_url, stream=True)
-
         try:
             response.raise_for_status()
-            image = Image.open(response.raw).convert("RGB")
+            pil_image = Image.open(response.raw).convert("RGB")
         except Exception as e:
-            print(f"Error processing request {request_id}: error={str(e)}, img_url={image_url}, question={question}")
-            raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}") from e
+            print(f"Error processing image: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}") from e
 
+        ## send to model
         prompt = f"<|image|><|begin_of_text|>{question}"
         stop_token_ids = None
-
         sampling_params = SamplingParams(
             temperature=config["temperature"],
             max_tokens=config["max_tokens"],
             stop_token_ids=stop_token_ids,
         )
-
         inputs = {
             "prompt": prompt,
-            "multi_modal_data": {"image": image},
+            "multi_modal_data": {"image": pil_image},
         }
 
         outputs = llm.generate(inputs, sampling_params=sampling_params)
         generated_text = outputs[0].outputs[0].text.strip()
 
-        # show the question, image, and response in the terminal for demonstration purposes
+        ## print response
         response = requests.get(image_url)
         try:
             response.raise_for_status()
+            ext: str = image_url.split("/")[-1].split(".")[-1]
+            upload_path = upload_dir / f"{uuid4()}{ext}"
+            upload_path.write_bytes(response.content)
         except Exception as e:
-            print(f"Error processing request {request_id}: error={str(e)}, img_url={image_url}, question={question}")
-            raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}") from e
-        image_filename = image_url.split("/")[-1]
-        image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}-{image_filename}")
-        with open(image_path, "wb") as file:
-            file.write(response.content)
-        terminal_image = from_file(image_path)
+            print(f"Error processing image: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}") from e
+
+        terminal_image = from_file(upload_path)
         terminal_image.draw()
         print(
             Colors.BOLD,
@@ -218,40 +229,92 @@ def modal_get():
 
     @f_app.post("/upload")
     async def main_upload(
-        request: Request, question: str = DEFAULT_QUESTION, api_key: bool = Security(verify_api_key)
+        image: UploadFile, question: str = Form(...), api_key: bool = Security(verify_api_key)
     ) -> str:
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        image_data = await request.body()
+        image_data = image.file.read()
 
+        # validate
+        ## ext
+        valid_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"}
+        file_extension = Path(image.filename).suffix.lower()
+        if file_extension not in valid_extensions:
+            print(f"Invalid file type: {file_extension}")
+            raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
+
+        ## save
+        upload_path = upload_dir / f"{uuid4()}{file_extension}"
+        upload_path.write_bytes(image_data)
         try:
-            image = Image.open(io.BytesIO(image_data)).convert("RGB")
+            pil_image = Image.open(upload_path).convert("RGB")
         except Exception as e:
-            print(f"Error processing request {request_id}: error={str(e)}, question={question}")
+            print(f"Invalid image data: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}") from e
 
+        ## mime type
+        try:
+            pil_image.verify()
+        except Exception as e:
+            os.remove(upload_path)
+            print(f"Invalid image data: {str(e)}")
+            raise HTTPException(status_code=400, detail="Invalid image data.") from e
+
+        ## size
+        MAX_FILE_SIZE_MB = 5
+        MAX_DIMENSIONS = (4096, 4096)
+        if os.path.getsize(upload_path) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            os.remove(upload_path)
+            print(f"File size exceeds {MAX_FILE_SIZE_MB}MB limit.")
+            raise HTTPException(status_code=400, detail=f"File size exceeds {MAX_FILE_SIZE_MB}MB limit.")
+        if pil_image.size[0] > MAX_DIMENSIONS[0] or pil_image.size[1] > MAX_DIMENSIONS[1]:
+            os.remove(upload_path)
+            print(f"Image dimensions exceed {MAX_DIMENSIONS[0]}x{MAX_DIMENSIONS[1]} pixels limit.")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image dimensions exceed {MAX_DIMENSIONS[0]}x{MAX_DIMENSIONS[1]} pixels limit.",
+            )
+
+        ## antivirus
+        try:
+            result = subprocess.run(  # noqa: S603
+                ["python", "main.py", str(upload_path)],  # noqa: S607
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd="/Python-Antivirus",
+            )
+            scan_result = result.stdout.strip().lower()
+            if scan_result == "infected":
+                os.remove(upload_path)
+                print("Potential threat detected.")
+                raise HTTPException(status_code=400, detail="Potential threat detected.")
+        except Exception as e:
+            os.remove(upload_path)
+            print(f"Error during antivirus scan: {e}")
+            raise HTTPException(status_code=500, detail=f"Error during antivirus scan: {e}") from e
+
+        ## send to model
         prompt = f"<|image|><|begin_of_text|>{question}"
         stop_token_ids = None
-
         sampling_params = SamplingParams(
             temperature=config["temperature"],
             max_tokens=config["max_tokens"],
             stop_token_ids=stop_token_ids,
         )
-
         inputs = {
             "prompt": prompt,
-            "multi_modal_data": {"image": image},
+            "multi_modal_data": {"image": pil_image},
         }
 
         outputs = llm.generate(inputs, sampling_params=sampling_params)
         generated_text = outputs[0].outputs[0].text.strip()
 
-        # show the question, image, and response in the terminal for demonstration purposes
+        ## print response
         image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}.jpg")
-        image.save(image_path)
+        pil_image.save(image_path)
         terminal_image = from_file(image_path)
         terminal_image.draw()
         print(
@@ -267,7 +330,7 @@ def modal_get():
 
     @f_app.post("/api-key")
     async def apikey() -> str:
-        k = ApiKeyCreate(key=secrets.token_hex(16))
+        k = ApiKeyCreate(key=secrets.token_hex(16), session_id=str(uuid4()))
         k = ApiKey.model_validate(k)
         with get_db_session() as db_session:
             db_session.add(k)
@@ -288,7 +351,7 @@ def main():
     api_key = response.json()
 
     response = requests.post(
-        modal_get.web_url,
+        f"{modal_get.web_url}/",
         json={"image_url": DEFAULT_IMG_URL, "question": DEFAULT_QUESTION},
         headers={"X-API-Key": api_key},
     )
@@ -296,17 +359,17 @@ def main():
 
     response = requests.post(
         f"{modal_get.web_url}/upload",
-        data=open(DEFAULT_IMG_PATH, "rb").read(),
-        headers={
-            "X-API-Key": api_key,
-            "Content-Type": "application/octet-stream",
-            "question": DEFAULT_QUESTION,
-        },
+        files={"image": open(DEFAULT_IMG_PATH, "rb")},
+        data={"question": DEFAULT_QUESTION},
+        headers={"X-API-Key": api_key},
     )
     assert response.ok, response.status_code
 
 
 # TODO:
+# - add load testing:
+#     - https://github.com/andrewhinh/admirer/blob/main/load_test/locust.ipynb
+#     - https://github.com/andrewhinh/admirer/blob/main/load_test/locust_http_user.py
 # - add multiple uploads/urls
 
 # - Replace with custom model impl FT on hard images
