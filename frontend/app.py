@@ -813,20 +813,20 @@ def modal_get():  # noqa: C901
     # routes
     ## for images, CSS, etc.
     @f_app.get("/{fname:path}.{ext:static}")
-    async def static_files(fname: str, ext: str):
+    def static_files(fname: str, ext: str):
         static_file_path = parent_path / f"{fname}.{ext}"
         if static_file_path.exists():
             return fh.FileResponse(static_file_path)
 
     ## toasts without target
     @f_app.post("/toast")
-    async def toast(session, message: str, type: str):
+    def toast(session, message: str, type: str):
         fh.add_toast(session, message, type)
         return fh.Div(id="toast-container", cls="hidden")
 
     ## pages
     @f_app.get("/")
-    async def home(
+    def home(
         session,
     ):
         return (
@@ -898,6 +898,11 @@ def modal_get():  # noqa: C901
                             id="new-image-url",
                             name="image_url",  # passed to fn call for python syntax
                             placeholder="Enter an image url",
+                            hx_target="this",
+                            hx_swap="outerHTML",
+                            hx_trigger="change, keyup delay:200ms changed",
+                            hx_post="/check-url",
+                            hx_indicator="#spinner",
                         ),
                         fh.Input(
                             id="new-question",
@@ -926,6 +931,12 @@ def modal_get():  # noqa: C901
                             name="image_file",
                             type="file",
                             accept="image/*",
+                            hx_target="this",
+                            hx_swap="none",
+                            hx_trigger="change delay:200ms changed",
+                            hx_post="/check-upload",
+                            hx_indicator="#spinner",
+                            hx_encoding="multipart/form-data",  # correct file encoding for check-upload since not in form
                         ),
                         fh.Input(
                             id="new-question",
@@ -949,6 +960,34 @@ def modal_get():  # noqa: C901
             ),
             gen_form_toggle(view, "outerHTML:#gen-form-toggle"),
         )
+
+    ## input validation
+    @f_app.post("/check-url")
+    def check_url(session, image_url: str):
+        if not validate_image_url(image_url):
+            fh.add_toast(session, "Invalid image URL", "error")
+        return (
+            fh.Input(
+                value=image_url,
+                id="new-image-url",
+                name="image_url",
+                placeholder="Enter an image url",
+                hx_target="this",
+                hx_swap="outerHTML",
+                hx_trigger="change, keyup delay:200ms changed",
+                hx_post="/check-url",
+            ),
+        )
+
+    @f_app.post("/check-upload")
+    def check_upload(
+        session,
+        image_file: fh.UploadFile,
+    ):
+        res = validate_image_file(image_file)
+        if isinstance(res, str):
+            fh.add_toast(session, res, "error")
+        return fh.Div(cls="hidden")
 
     ## generation routes
     @f_app.post("/url")
@@ -1009,7 +1048,7 @@ def modal_get():  # noqa: C901
         )
 
     @f_app.post("/upload")
-    async def generate_from_upload(
+    def generate_from_upload(
         session,
         image_file: fh.UploadFile,
         question: str,
@@ -1104,7 +1143,7 @@ def modal_get():  # noqa: C901
 
     ## export to CSV
     @f_app.get("/export-gens")
-    async def export_gens(
+    def export_gens(
         req,
     ):
         session = req.session
@@ -1125,7 +1164,7 @@ def modal_get():  # noqa: C901
         return response
 
     @f_app.get("/export-keys")
-    async def export_keys(
+    def export_keys(
         req,
     ):
         session = req.session
@@ -1221,12 +1260,11 @@ def modal_get():  # noqa: C901
 # - add gens/keys counts: https://hypermedia.systems/more-htmx-patterns/#_lazy_loading
 # - add granular delete: https://hypermedia.systems/more-htmx-patterns/#_inline_delete
 # - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
-# - add better infinite scroll: https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
+# - add better infinite scroll:
+#   - https://github.com/AnswerDotAI/FastHTML-Gallery/blob/main/examples/dynamic_user_interface/infinite_scroll/app.py
+#   - https://hypermedia.systems/htmx-patterns/#_another_application_improvement_paging
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 
 # - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 #   - Only allow authorized users to upload files:
 #       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
-#       - add form validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
-# - better url/file validation: https://hypermedia.systems/htmx-patterns/#_next_steps_validating_contact_emails
-# - add animations: https://hypermedia.systems/a-dynamic-archive-ui/#_smoothing_things_out_animations_in_htmx
