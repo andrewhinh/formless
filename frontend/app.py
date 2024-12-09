@@ -824,11 +824,10 @@ def modal_get():  # noqa: C901
         elif g.image_file:
             response = requests.post(
                 f"{os.getenv('API_URL')}/upload",
-                data=open(g.image_file, "rb").read(),
+                files={"image": open(g.image_file, "rb")},
+                data={"question": g.question},
                 headers={
                     "X-API-Key": k.key,
-                    "Content-Type": "application/octet-stream",
-                    "question": g.question,
                 },
             )
 
