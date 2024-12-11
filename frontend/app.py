@@ -465,6 +465,31 @@ def modal_get():  # noqa: C901
             cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
         )
 
+    def num_gens(gens, hx_swap_oob: bool = "false"):
+        return fh.Div(
+            fh.P(
+                f"Count: {len(gens)}",
+                hx_ext="sse",
+                sse_connect="/stream-gen-count",
+                sse_swap="UpdateGensCount",
+                cls="text-blue-300",
+            ),
+            id="gen-count",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="w-full md:w-2/3",
+        )
+
+    def num_keys(keys, hx_swap_oob: bool = "false"):
+        return fh.Div(
+            fh.P(
+                f"Count: {len(keys)}",
+                cls="text-blue-300",
+            ),
+            id="key-count",
+            hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
+            cls="w-full md:w-2/3",
+        )
+
     def gen_manage(gens_present: bool, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
@@ -650,6 +675,7 @@ def modal_get():  # noqa: C901
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
+            num_gens(len(get_curr_gens(session["session_id"]))),
             gen_manage(gens_present),
             fh.Div(
                 get_gen_table_part(session),
@@ -679,6 +705,7 @@ def modal_get():  # noqa: C901
                 hx_swap="afterbegin",
                 cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
+            num_keys(len(get_curr_keys(session["session_id"]))),
             key_manage(keys_present),
             fh.Div(
                 fh.Div(
@@ -876,6 +903,15 @@ def modal_get():  # noqa: C901
                 yield fh.sse_message(fh.NotStr(inner_content[::-1]))
             await sleep(1)
 
+    async def stream_gen_count_updates(
+        session,
+    ):
+        while not shutdown_event.is_set():
+            curr_gens = get_curr_gens(session["session_id"])
+            if len(curr_gens) != len(shown_generations):
+                yield fh.sse_message(num_gens(curr_gens))
+            await sleep(1)
+
     async def stream_balance_updates():
         while not shutdown_event.is_set():
             curr_balance = get_curr_balance()
@@ -969,6 +1005,12 @@ def modal_get():  # noqa: C901
         session,
     ):
         return fh.EventStream(stream_gen_updates(session))
+
+    @f_app.get("/stream-gen-count")
+    async def stream_gen_count(
+        session,
+    ):
+        return fh.EventStream(stream_gen_count_updates(session))
 
     @f_app.get("/stream-balance")
     async def stream_balance():
@@ -1151,6 +1193,7 @@ def modal_get():  # noqa: C901
             gen_view(g_read, session),
             clear_img_input,
             clear_q_input,
+            num_gens(len(get_curr_gens(session["session_id"])), "true"),
             gen_manage(gens_present, "true"),
             gen_load_more(
                 gens_present,
@@ -1212,6 +1255,7 @@ def modal_get():  # noqa: C901
             gen_view(g_read, session),
             clear_img_input,
             clear_q_input,
+            num_gens(len(get_curr_gens(session["session_id"])), "true"),
             gen_manage(gens_present, "true"),
             gen_load_more(
                 gens_present,
@@ -1231,6 +1275,7 @@ def modal_get():  # noqa: C901
         keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return (
             key_view(k_read, session),
+            num_keys(len(get_curr_keys(session["session_id"])), "true"),
             key_manage(
                 keys_present,
                 "true",
@@ -1385,7 +1430,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add gens/keys counts: https://hypermedia.systems/more-htmx-patterns/#_lazy_loading
 # - add granular delete: https://hypermedia.systems/more-htmx-patterns/#_inline_delete
 # - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
