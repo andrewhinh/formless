@@ -465,29 +465,29 @@ def modal_get():  # noqa: C901
             cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
         )
 
-    def num_gens(gens, hx_swap_oob: bool = "false"):
+    def num_gens(gen_count, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.P(
-                f"Count: {len(gens)}",
+                f"({gen_count} total generations)",
                 hx_ext="sse",
                 sse_connect="/stream-gen-count",
                 sse_swap="UpdateGensCount",
-                cls="text-blue-300",
+                cls="text-blue-300 text-md whitespace-nowrap",
             ),
             id="gen-count",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="w-full md:w-2/3",
+            cls="w-auto h-full flex justify-center",
         )
 
-    def num_keys(keys, hx_swap_oob: bool = "false"):
+    def num_keys(key_count, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.P(
-                f"Count: {len(keys)}",
-                cls="text-blue-300",
+                f"({key_count} total keys)",
+                cls="text-blue-300 text-md whitespace-nowrap",
             ),
             id="key-count",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="w-full md:w-2/3",
+            cls="w-auto h-full",
         )
 
     def gen_manage(gens_present: bool, hx_swap_oob: bool = "false"):
@@ -696,16 +696,19 @@ def modal_get():  # noqa: C901
     ):
         keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return fh.Main(
-            fh.Button(
-                "Request New Key",
-                id="request-new-key",
-                hx_post="/request-key",
-                hx_indicator="#spinner",
-                hx_target="#api-key-table",
-                hx_swap="afterbegin",
-                cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
+            fh.Div(
+                fh.Button(
+                    "Request New Key",
+                    id="request-new-key",
+                    hx_post="/request-key",
+                    hx_indicator="#spinner",
+                    hx_target="#api-key-table",
+                    hx_swap="afterbegin",
+                    cls="text-blue-300 hover:text-blue-100 p-2 w-full border-blue-300 border-2 hover:border-blue-100",
+                ),
+                num_keys(len(get_curr_keys(session["session_id"]))),
+                cls="w-full md:w-2/3 flex gap-4 justify-center items-center",
             ),
-            num_keys(len(get_curr_keys(session["session_id"]))),
             key_manage(keys_present),
             fh.Div(
                 fh.Div(
@@ -909,7 +912,7 @@ def modal_get():  # noqa: C901
         while not shutdown_event.is_set():
             curr_gens = get_curr_gens(session["session_id"])
             if len(curr_gens) != len(shown_generations):
-                yield fh.sse_message(num_gens(curr_gens))
+                yield fh.sse_message(num_gens(len(curr_gens)))
             await sleep(1)
 
     async def stream_balance_updates():
