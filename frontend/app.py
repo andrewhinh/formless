@@ -98,30 +98,20 @@ def modal_get():  # noqa: C901
             fh.Title(NAME + " | 404"),
             fh.Div(
                 nav(),
-                fh.Titled(
-                    fh.P(
-                        message,
-                        hx_indicator="#spinner",
-                        cls="text-2xl text-red-300 animate-typing overflow-hidden whitespace-nowrap border-r-4 border-red-300",
-                        style=f"animation: typing 2s steps({typing_steps}, end), blink-caret .75s step-end infinite",
-                    ),
-                    cls="flex flex-col justify-center items-center gap-4 p-8",
+                fh.Main(
+                    fh.Div(
+                        fh.P(
+                            message,
+                            hx_indicator="#spinner",
+                            cls="text-2xl text-red-300 animate-typing overflow-hidden whitespace-nowrap border-r-4 border-red-300",
+                            style=f"animation: typing 2s steps({typing_steps}, end), blink-caret .75s step-end infinite",
+                        ),
+                    ),  # to contain typing animation
+                    cls="flex flex-col justify-center items-center grow gap-4 p-8",
                 ),
                 toast_container(),
                 footer(),
                 cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
-            ),
-            fh.Style(
-                """
-            @keyframes typing {
-                from { width: 0; }
-                to { width: 100%; }
-            }
-            @keyframes blink-caret {
-                from, to { border-color: transparent; }
-                50% { border-color: red; }
-            }
-            """
             ),
         )
 
@@ -134,6 +124,22 @@ def modal_get():  # noqa: C901
             fh.HighlightJS(langs=["python", "javascript", "html", "css"]),
             fh.Link(rel="icon", href="/favicon.ico", type="image/x-icon"),
             fh.Script(src="https://unpkg.com/htmx-ext-sse@2.2.1/sse.js"),
+            fh.Style(
+                """
+                @keyframes typing {
+                from { width: 0; }
+                to { width: 100%; }
+                }
+                @keyframes blink-caret {
+                    from, to { border-color: transparent; }
+                    50% { border-color: red; }
+                }
+                tr.htmx-swapping {
+                    opacity: 0;
+                    transition: opacity .2s ease-out;
+                }
+                """
+            ),
         ],
         live=os.getenv("LIVE", False),
         debug=os.getenv("DEBUG", False),
@@ -266,7 +272,7 @@ def modal_get():  # noqa: C901
                     ),
                     cls="max-h-48 w-1/2 flex flex-col gap-2",
                 ),
-                cls="max-h-60 w-full flex justify-between gap-4",
+                cls="max-h-60 w-full flex justify-between items-center gap-4",
                 id=f"gen-{g.id}",
             )
         elif g.response:
@@ -302,7 +308,7 @@ def modal_get():  # noqa: C901
                     ),
                     cls="max-h-48 w-1/2 flex flex-col gap-2",
                 ),
-                cls="max-h-60 w-full flex justify-between gap-4",
+                cls="max-h-60 w-full flex justify-between items-center gap-4",
                 id=f"gen-{g.id}",
             )
         return fh.Card(
@@ -328,7 +334,7 @@ def modal_get():  # noqa: C901
                 fh.P("Scanning image ..."),
                 cls="max-h-48 w-1/2 flex flex-col gap-2",
             ),
-            cls="max-h-60 w-full flex justify-between gap-4",
+            cls="max-h-60 w-full flex justify-between items-center gap-4",
             id=f"gen-{g.id}",
         )
 
@@ -342,93 +348,83 @@ def modal_get():  # noqa: C901
         if k.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
+        if not k.key or not k.granted_at:
+            return None
 
-        if k.key and k.granted_at:
-            obscured_key = k.key[:4] + "*" * (len(k.key) - 4)
-            short_key = obscured_key[:8] + "..."
+        obscured_key = k.key[:4] + "*" * (len(k.key) - 4)
+        short_key = obscured_key[:8] + "..."
 
-            return (
-                fh.Div(
-                    fh.Button(
-                        fh.Svg(
-                            """<path d="M10 12L14 16M14 12L10 16M18 6L17.1991 18.0129C17.129 19.065 17.0939 19.5911 16.8667 19.99C16.6666 20.3412 16.3648 20.6235 16.0011 20.7998C15.588 21 15.0607 21 14.0062 21H9.99377C8.93927 21 8.41202 21 7.99889 20.7998C7.63517 20.6235 7.33339 20.3412 7.13332 19.99C6.90607 19.5911 6.871 19.065 6.80086 18.0129L6 6M4 6H20M16 6L15.7294 5.18807C15.4671 4.40125 15.3359 4.00784 15.0927 3.71698C14.8779 3.46013 14.6021 3.26132 14.2905 3.13878C13.9376 3 13.523 3 12.6936 3H11.3064C10.477 3 10.0624 3 9.70951 3.13878C9.39792 3.26132 9.12208 3.46013 8.90729 3.71698C8.66405 4.00784 8.53292 4.40125 8.27064 5.18807L8 6" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>""",
-                            width="24",
-                            height="24",
-                            viewBox="0 0 24 24",
-                            fill="none",
-                            cls="htmx-indicator w-8 h-8 fill-red-300 hover:fill-red-100",
-                        ),
-                        hx_delete=f"/key/{k.id}",
-                        hx_indicator="#spinner",
-                        hx_target="closest div",
-                        hx_swap="outerHTML swap:1s",
-                        hx_confirm="Are you sure?",
-                        cls="w-1/8",
-                    ),
-                    fh.Style(
-                        """
-                        div.htmx-swapping {
-                            opacity: 0;
-                            transition: opacity 1s ease-out;
-                        }
-                        """
-                    ),
+        return (
+            fh.Tr(
+                fh.Td(
                     fh.Div(
-                        obscured_key,
-                        onmouseover=(
-                            f"if (window.innerWidth >= 768) {{"
-                            f" this.innerText = '{k.key}'; "
-                            f"}} else {{"
-                            f" this.innerText = '{short_key}'; "
-                            f"}}"
+                        fh.Button(
+                            fh.Svg(
+                                fh.NotStr(
+                                    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
+                                ),
+                                cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                            ),
+                            hx_delete=f"/key/{k.id}",
+                            hx_indicator="#spinner",
+                            hx_target="closest tr",
+                            hx_swap="outerHTML swap:.2s",
+                            hx_confirm="Are you sure?",
                         ),
-                        onmouseout=(
-                            f"if (window.innerWidth >= 768) {{"
-                            f" this.innerText = '{obscured_key}'; "
-                            f"}} else {{"
-                            f" this.innerText = '{short_key}'; "
-                            f"}}"
+                        fh.P(
+                            obscured_key,
+                            onmouseover=(
+                                f"if (window.innerWidth >= 768) {{"
+                                f" this.innerText = '{k.key}'; "
+                                f"}} else {{"
+                                f" this.innerText = '{short_key}'; "
+                                f"}}"
+                            ),
+                            onmouseout=(
+                                f"if (window.innerWidth >= 768) {{"
+                                f" this.innerText = '{obscured_key}'; "
+                                f"}} else {{"
+                                f" this.innerText = '{short_key}'; "
+                                f"}}"
+                            ),
+                            onclick=f"navigator.clipboard.writeText('{k.key}');",
+                            hx_post="/toast?message=Copied to clipboard!&type=success",
+                            hx_indicator="#spinner",
+                            hx_target="#toast-container",
+                            hx_swap="outerHTML",
+                            cls="text-blue-300 hover:text-blue-100 cursor-pointer",
+                            title="Click to copy",
+                            id=f"key-element-{k.id}",
                         ),
-                        onclick=f"navigator.clipboard.writeText('{k.key}');",
-                        hx_post="/toast?message=Copied to clipboard!&type=success",
-                        hx_indicator="#spinner",
-                        hx_target="#toast-container",
-                        hx_swap="outerHTML",
-                        cls="text-blue-300 hover:text-blue-100 cursor-pointer w-5/8",
-                        title="Click to copy",
-                        id=f"key-element-{k.id}",
+                        cls="w-2/3 flex items-center gap-2",
                     ),
-                    fh.Div(
+                    fh.P(
                         k.granted_at.strftime("%Y-%m-%d %H:%M:%S"),
-                        cls="w-3/8",
+                        cls="w-1/3",
                     ),
                     id=f"key-{k.id}",
-                    cls="flex p-2",
+                    cls="w-full flex justify-between items-center p-2",
                 ),
-                fh.Script(
-                    f"""
-                    function updateKeyDisplay() {{
-                        var element = document.getElementById('key-element-{k.id}');
-                        if (element) {{
-                            if (window.innerWidth >= 768) {{
-                                element.innerText = '{obscured_key}';
-                            }} else {{
-                                element.innerText = '{short_key}';
-                            }}
+                cls="flex grow",
+            ),
+            fh.Script(
+                f"""
+                function updateKeyDisplay() {{
+                    var element = document.getElementById('key-element-{k.id}');
+                    if (element) {{
+                        if (window.innerWidth >= 768) {{
+                            element.innerText = '{obscured_key}';
+                        }} else {{
+                            element.innerText = '{short_key}';
                         }}
                     }}
+                }}
 
-                    window.onresize = updateKeyDisplay;
-                    window.onload = updateKeyDisplay;
-                    updateKeyDisplay();
-                    """
-                ),
-            )
-        return fh.Div(
-            fh.Div("Requesting key ...", cls="w-2/3"),
-            fh.Div("", cls="w-1/3"),
-            id=f"key-{k.key}",
-            cls="flex p-2",
+                window.onresize = updateKeyDisplay;
+                window.onload = updateKeyDisplay;
+                updateKeyDisplay();
+                """
+            ),
         )
 
     def balance_view(
@@ -483,7 +479,7 @@ def modal_get():  # noqa: C901
             ),
             id="gen-count",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="w-auto h-full flex justify-center",
+            cls="w-auto h-full flex justify-center items-center",
         )
 
     def num_keys(key_count, hx_swap_oob: bool = "false"):
@@ -494,7 +490,7 @@ def modal_get():  # noqa: C901
             ),
             id="key-count",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="w-auto h-full",
+            cls="w-auto h-full flex justify-center items-center",
         )
 
     def gen_manage(gens_present: bool, hx_swap_oob: bool = "false"):
@@ -524,7 +520,7 @@ def modal_get():  # noqa: C901
             else None,
             id="gen-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="flex flex-col md:flex-row justify-center gap-2 md:gap-4 w-full md:w-2/3",
+            cls="flex flex-col md:flex-row justify-center items-center gap-2 md:gap-4 w-full md:w-2/3",
         )
 
     def key_manage(keys_present: bool, hx_swap_oob: bool = "false"):
@@ -554,7 +550,7 @@ def modal_get():  # noqa: C901
             else None,
             id="key-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="flex flex-col md:flex-row justify-center gap-4 w-full md:w-2/3",
+            cls="flex flex-col md:flex-row justify-center items-center gap-4 w-full md:w-2/3",
         )
 
     def gen_load_more(gens_present: bool, still_more: bool, idx: int = 2, hx_swap_oob: bool = "false"):
@@ -600,7 +596,8 @@ def modal_get():  # noqa: C901
                 cls="text-xl text-blue-300 hover:text-blue-100 font-mono font-family:Consolas, Monaco, 'Lucida Console', 'Liberation Mono', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', 'Courier New'",
             ),
             fh.Svg(
-                """<style>
+                fh.NotStr(
+                    """<style>
                     .spinner_zWVm { animation: spinner_5QiW 1.2s linear infinite, spinner_PnZo 1.2s linear infinite; }
                     .spinner_gfyD { animation: spinner_5QiW 1.2s linear infinite, spinner_4j7o 1.2s linear infinite; animation-delay: .1s; }
                     .spinner_T5JJ { animation: spinner_5QiW 1.2s linear infinite, spinner_fLK4 1.2s linear infinite; animation-delay: .1s; }
@@ -630,11 +627,8 @@ def modal_get():  # noqa: C901
                 <rect class="spinner_BDNj" x="15.66" y="8.33" width="7.33" height="7.33"/>
                 <rect class="spinner_rCw3" x="8.33" y="15.66" width="7.33" height="7.33"/>
                 <rect class="spinner_Rszm" x="15.66" y="15.66" width="7.33" height="7.33"/>
-                """,
-                width="24",
-                height="24",
-                viewBox="0 0 24 24",
-                fill="none",
+                """
+                ),
                 id="spinner",
                 cls="htmx-indicator w-8 h-8 absolute top-4 left-1/2 transform -translate-x-1/2 fill-blue-300",
             ),
@@ -647,24 +641,20 @@ def modal_get():  # noqa: C901
                 fh.Div(
                     fh.A(
                         fh.Svg(
-                            si_github.svg,
-                            width="35",
-                            height="35",
-                            viewBox="0 0 15 15",
-                            fill="none",
-                            cls="rounded p-0.5 hover:bg-zinc-700 cursor-pointer",
+                            fh.NotStr(
+                                si_github.svg,
+                            ),
+                            cls="w-8 h-8 text-blue-300 hover:text-blue-100 cursor-pointer",
                         ),
                         href="https://github.com/andrewhinh/formless",
                         target="_blank",
                     ),
                     fh.A(
                         fh.Svg(
-                            si_pypi.svg,
-                            width="35",
-                            height="35",
-                            viewBox="0 0 15 15",
-                            fill="none",
-                            cls="rounded p-0.5 hover:bg-zinc-700 cursor-pointer",
+                            fh.NotStr(
+                                si_pypi.svg,
+                            ),
+                            cls="w-8 h-8 text-blue-300 hover:text-blue-100 cursor-pointer",
                         ),
                         href="https://pypi.org/project/formless/",
                         target="_blank",
@@ -673,7 +663,7 @@ def modal_get():  # noqa: C901
                 ),
                 cls="flex flex-col items-end md:flex-row md:items-center gap-2 md:gap-8",
             ),
-            cls="flex justify-between p-4 relative",
+            cls="flex justify-between items-center p-4 relative",
         )
 
     def main_content(
@@ -692,7 +682,7 @@ def modal_get():  # noqa: C901
                     hx_swap="outerHTML",
                     hx_trigger="load",
                 ),
-                cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
+                cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center items-center",
             ),
             num_gens(len(get_curr_gens(session["session_id"]))),
             gen_manage(gens_present),
@@ -715,27 +705,29 @@ def modal_get():  # noqa: C901
     ):
         keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return fh.Main(
-            fh.Div(
-                fh.Button(
-                    "Request New Key",
-                    id="request-new-key",
-                    hx_post="/request-key",
-                    hx_indicator="#spinner",
-                    hx_target="#api-key-table",
-                    hx_swap="afterbegin",
-                    cls="text-blue-300 hover:text-blue-100 p-2 w-full border-blue-300 border-2 hover:border-blue-100",
-                ),
-                num_keys(len(get_curr_keys(session["session_id"]))),
-                cls="w-full md:w-2/3 flex gap-4 justify-center items-center",
+            fh.Button(
+                "Request New Key",
+                id="request-new-key",
+                hx_post="/request-key",
+                hx_indicator="#spinner",
+                hx_target="#api-key-table",
+                hx_swap="afterbegin",
+                cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
+            num_keys(len(get_curr_keys(session["session_id"]))),
             key_manage(keys_present),
-            fh.Div(
-                fh.Div(
-                    fh.Div("Key", cls="font-bold w-2/3"),
-                    fh.Div("Granted At", cls="font-bold w-1/3"),
-                    cls="flex p-2",
+            fh.Table(
+                fh.Thead(
+                    fh.Tr(
+                        fh.Th(
+                            fh.P("Key", cls="font-bold w-2/3"),
+                            fh.P("Granted At", cls="font-bold w-1/3"),
+                            cls="w-full flex justify-between items-center p-2",
+                        ),
+                        cls="flex grow",
+                    ),
                 ),
-                fh.Div(
+                fh.Tbody(
                     get_key_table_part(session),
                     id="api-key-table",
                 ),
@@ -776,7 +768,7 @@ def modal_get():  # noqa: C901
                 ),
                 cls="flex flex-col text-right gap-0.5",
             ),
-            cls="flex justify-between p-4 text-sm md:text-lg",
+            cls="flex justify-between items-center p-4 text-sm md:text-lg",
         )
 
     # helper fns
@@ -968,7 +960,7 @@ def modal_get():  # noqa: C901
     @f_app.post("/toast")
     def toast(session, message: str, type: str):
         fh.add_toast(session, message, type)
-        return fh.Div(id="toast-container", cls="hidden")
+        return toast_container()
 
     ## pages
     @f_app.get("/")
@@ -1045,69 +1037,63 @@ def modal_get():  # noqa: C901
         return (
             (
                 fh.Form(
-                    fh.Div(
-                        fh.Input(
-                            id="new-image-url",
-                            name="image_url",  # passed to fn call for python syntax
-                            placeholder="Enter an image url",
-                            hx_target="this",
-                            hx_swap="outerHTML",
-                            hx_trigger="change, keyup delay:200ms changed",
-                            hx_post="/check-url",
-                            hx_indicator="#spinner",
-                        ),
-                        fh.Input(
-                            id="new-question",
-                            name="question",
-                            placeholder="Specify format or question",
-                        ),
-                        fh.Button(
-                            "Scan",
-                            type="submit",
-                            cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                        ),
-                        cls="flex flex-col md:gap-2",
+                    fh.Input(
+                        id="new-image-url",
+                        name="image_url",  # passed to fn call for python syntax
+                        placeholder="Enter an image url",
+                        hx_target="this",
+                        hx_swap="outerHTML",
+                        hx_trigger="change, keyup delay:200ms changed",
+                        hx_post="/check-url",
+                        hx_indicator="#spinner",
+                    ),
+                    fh.Input(
+                        id="new-question",
+                        name="question",
+                        placeholder="Specify format or question",
+                    ),
+                    fh.Button(
+                        "Scan",
+                        type="submit",
+                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                     ),
                     hx_post="/url",
                     hx_indicator="#spinner",
                     hx_target="#gen-list",
                     hx_swap="afterbegin",
                     id="gen-form",
-                    cls="w-full h-full",
+                    cls="flex flex-col md:gap-2 w-full h-full",
                 )
                 if view == "image-url"
                 else fh.Form(
-                    fh.Div(
-                        fh.Input(
-                            id="new-image-upload",
-                            name="image_file",
-                            type="file",
-                            accept="image/*",
-                            hx_target="this",
-                            hx_swap="none",
-                            hx_trigger="change delay:200ms changed",
-                            hx_post="/check-upload",
-                            hx_indicator="#spinner",
-                            hx_encoding="multipart/form-data",  # correct file encoding for check-upload since not in form
-                        ),
-                        fh.Input(
-                            id="new-question",
-                            name="question",
-                            placeholder="Specify format or question",
-                        ),
-                        fh.Button(
-                            "Scan",
-                            type="submit",
-                            cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
-                        ),
-                        cls="flex flex-col gap-4",
+                    fh.Input(
+                        id="new-image-upload",
+                        name="image_file",
+                        type="file",
+                        accept="image/*",
+                        hx_target="this",
+                        hx_swap="none",
+                        hx_trigger="change delay:200ms changed",
+                        hx_post="/check-upload",
+                        hx_indicator="#spinner",
+                        hx_encoding="multipart/form-data",  # correct file encoding for check-upload since not in form
+                    ),
+                    fh.Input(
+                        id="new-question",
+                        name="question",
+                        placeholder="Specify format or question",
+                    ),
+                    fh.Button(
+                        "Scan",
+                        type="submit",
+                        cls="text-blue-300 hover:text-blue-100 p-2 border-blue-300 border-2 hover:border-blue-100",
                     ),
                     hx_post="/upload",
                     hx_indicator="#spinner",
                     hx_target="#gen-list",
                     hx_swap="afterbegin",
                     id="gen-form",
-                    cls="w-full h-full",
+                    cls="flex flex-col gap-4 w-full h-full",
                 ),
             ),
             gen_form_toggle(view, "true"),
@@ -1477,7 +1463,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add granular delete: https://hypermedia.systems/more-htmx-patterns/#_inline_delete
 # - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 
