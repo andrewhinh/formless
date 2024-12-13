@@ -136,7 +136,7 @@ def modal_get():  # noqa: C901
                 }
                 tr.htmx-swapping {
                     opacity: 0;
-                    transition: opacity .2s ease-out;
+                    transition: opacity .5s ease-out;
                 }
                 """
             ),
@@ -358,18 +358,10 @@ def modal_get():  # noqa: C901
             fh.Tr(
                 fh.Td(
                     fh.Div(
-                        fh.Button(
-                            fh.Svg(
-                                fh.NotStr(
-                                    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
-                                ),
-                                cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
-                            ),
-                            hx_delete=f"/key/{k.id}",
-                            hx_indicator="#spinner",
-                            hx_target="closest tr",
-                            hx_swap="outerHTML swap:.2s",
-                            hx_confirm="Are you sure?",
+                        fh.Input(
+                            type="checkbox",
+                            name="selected_keys",
+                            value=k.id,
                         ),
                         fh.P(
                             obscured_key,
@@ -398,9 +390,24 @@ def modal_get():  # noqa: C901
                         ),
                         cls="w-2/3 flex items-center gap-2",
                     ),
-                    fh.P(
-                        k.granted_at.strftime("%Y-%m-%d %H:%M:%S"),
-                        cls="w-1/3",
+                    fh.Div(
+                        fh.P(
+                            k.granted_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        ),
+                        fh.Button(
+                            fh.Svg(
+                                fh.NotStr(
+                                    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
+                                ),
+                                cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                            ),
+                            hx_delete=f"/key/{k.id}",
+                            hx_indicator="#spinner",
+                            hx_target="closest tr",
+                            hx_swap="outerHTML swap:.5s",
+                            hx_confirm="Are you sure?",
+                        ),
+                        cls="w-1/3 flex items-center gap-2",
                     ),
                     id=f"key-{k.id}",
                     cls="w-full flex justify-between items-center p-2",
@@ -496,8 +503,9 @@ def modal_get():  # noqa: C901
     def gen_manage(gens_present: bool, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
-                "Clear all",
+                "Delete all",
                 hx_delete="/gens",
+                hx_swap="swap:.5s",
                 hx_indicator="#spinner",
                 hx_target="body",
                 hx_push_url="true",
@@ -526,12 +534,24 @@ def modal_get():  # noqa: C901
     def key_manage(keys_present: bool, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
-                "Clear all",
-                hx_delete="/keys",
+                "Delete selected",
+                hx_delete="/keys/select",
                 hx_indicator="#spinner",
                 hx_target="body",
                 hx_push_url="true",
                 hx_confirm="Are you sure?",
+                hx_swap="swap:.5s",
+                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
+            )
+            if keys_present
+            else None,
+            fh.Button(
+                "Delete all",
+                hx_delete="/keys",
+                hx_indicator="#spinner",
+                hx_target="#api-key-table",
+                hx_confirm="Are you sure?",
+                hx_swap="swap:.5s",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if keys_present
@@ -550,7 +570,7 @@ def modal_get():  # noqa: C901
             else None,
             id="key-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="flex flex-col md:flex-row justify-center items-center gap-4 w-full md:w-2/3",
+            cls="flex flex-col md:flex-row justify-center items-center gap-4 w-full",
         )
 
     def gen_load_more(gens_present: bool, still_more: bool, idx: int = 2, hx_swap_oob: bool = "false"):
@@ -715,23 +735,26 @@ def modal_get():  # noqa: C901
                 cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
             num_keys(len(get_curr_keys(session["session_id"]))),
-            key_manage(keys_present),
-            fh.Table(
-                fh.Thead(
-                    fh.Tr(
-                        fh.Th(
-                            fh.P("Key", cls="font-bold w-2/3"),
-                            fh.P("Granted At", cls="font-bold w-1/3"),
-                            cls="w-full flex justify-between items-center p-2",
+            fh.Form(
+                key_manage(keys_present),
+                fh.Table(
+                    fh.Thead(
+                        fh.Tr(
+                            fh.Th(
+                                fh.P("Key", cls="font-bold w-2/3"),
+                                fh.P("Granted At", cls="font-bold w-1/3"),
+                                cls="w-full flex justify-between items-center p-2",
+                            ),
+                            cls="flex grow",
                         ),
-                        cls="flex grow",
                     ),
+                    fh.Tbody(
+                        get_key_table_part(session),
+                        id="api-key-table",
+                    ),
+                    cls="w-full text-sm md:text-lg flex flex-col gap-2 border-slate-500 border-2",
                 ),
-                fh.Tbody(
-                    get_key_table_part(session),
-                    id="api-key-table",
-                ),
-                cls="w-full md:w-2/3 flex flex-col gap-2 text-sm md:text-lg border-slate-500 border-2",
+                cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
             key_load_more(
                 keys_present, len(get_curr_keys(session["session_id"], number=max_keys, offset=max_keys)) > 0
@@ -1295,9 +1318,9 @@ def modal_get():  # noqa: C901
             ),
         )
 
-    ## clear
+    ## delete
     @f_app.delete("/gens")
-    def clear_all(
+    def delete_gens(
         session,
     ):
         gens = get_curr_gens(session["session_id"])
@@ -1311,16 +1334,40 @@ def modal_get():  # noqa: C901
         return fh.RedirectResponse("/", status_code=303)
 
     @f_app.delete("/keys")
-    def clear_keys(
-        session,
-    ):
+    def delete_keys(session):
         keys = get_curr_keys(session["session_id"])
         for k in keys:
             with get_db_session() as db_session:
                 db_session.delete(k)
                 db_session.commit()
         fh.add_toast(session, "Deleted keys.", "success")
-        return fh.RedirectResponse("/developer", status_code=303)
+        return (
+            "",
+            num_keys(len(get_curr_keys(session["session_id"])), "true"),
+            key_manage(
+                bool(get_curr_keys(session["session_id"], number=1)),
+                "true",
+            ),
+            key_load_more(
+                bool(get_curr_keys(session["session_id"], number=1)),
+                False,
+                hx_swap_oob="true",
+            ),
+        )
+
+    @f_app.delete("/keys/select")
+    def delete_select_keys(session, selected_keys: list[int] = None):
+        if selected_keys:
+            with get_db_session() as db_session:
+                keys = db_session.query(ApiKey).filter(ApiKey.id.in_(selected_keys)).all()
+                for k in keys:
+                    db_session.delete(k)
+                    db_session.commit()
+            fh.add_toast(session, "Deleted keys.", "success")
+            return fh.RedirectResponse("/developer", status_code=303)  # TODO: replace with rerender of page instead
+        else:
+            fh.add_toast(session, "No keys selected.", "warning")
+            return fh.Response(status_code=204)
 
     @f_app.delete("/key/{key_id}")
     def delete_key(
@@ -1463,9 +1510,8 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add bulk delete: https://hypermedia.systems/more-htmx-patterns/#_bulk_delete
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
-
-# - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
-#   - Only allow authorized users to upload files:
-#       - add user authentication: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+# - add user authentication:
+#   - save gens and keys to user account
+#   - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+#       - Only allow authorized users to upload files: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
