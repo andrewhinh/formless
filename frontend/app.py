@@ -136,7 +136,7 @@ def modal_get():  # noqa: C901
                 }
                 tr.htmx-swapping {
                     opacity: 0;
-                    transition: opacity .5s ease-out;
+                    transition: opacity .25s ease-out;
                 }
                 """
             ),
@@ -213,6 +213,8 @@ def modal_get():  # noqa: C901
     shutdown_event = fh.signal_shutdown()
     global shown_generations
     shown_generations = {}
+    global shown_keys
+    shown_keys = []
     global shown_balance
     shown_balance = 0
 
@@ -404,7 +406,7 @@ def modal_get():  # noqa: C901
                             hx_delete=f"/key/{k.id}",
                             hx_indicator="#spinner",
                             hx_target="closest tr",
-                            hx_swap="outerHTML swap:.5s",
+                            hx_swap="outerHTML swap:.25s",
                             hx_confirm="Are you sure?",
                         ),
                         cls="w-1/3 flex items-center gap-2",
@@ -505,7 +507,6 @@ def modal_get():  # noqa: C901
             fh.Button(
                 "Delete all",
                 hx_delete="/gens",
-                hx_swap="swap:.5s",
                 hx_indicator="#spinner",
                 hx_target="body",
                 hx_push_url="true",
@@ -537,10 +538,8 @@ def modal_get():  # noqa: C901
                 "Delete selected",
                 hx_delete="/keys/select",
                 hx_indicator="#spinner",
-                hx_target="body",
-                hx_push_url="true",
+                hx_target="#api-key-table",
                 hx_confirm="Are you sure?",
-                hx_swap="swap:.5s",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if keys_present
@@ -551,7 +550,6 @@ def modal_get():  # noqa: C901
                 hx_indicator="#spinner",
                 hx_target="#api-key-table",
                 hx_confirm="Are you sure?",
-                hx_swap="swap:.5s",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
             if keys_present
@@ -1303,6 +1301,8 @@ def modal_get():  # noqa: C901
         k = ApiKeyCreate(session_id=session["session_id"])
         k = generate_key_and_save(k)
         k_read = ApiKeyRead.model_validate(k)
+        global shown_keys
+        shown_keys.append(k.id)
         keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return (
             key_view(k_read, session),
@@ -1336,10 +1336,12 @@ def modal_get():  # noqa: C901
     @f_app.delete("/keys")
     def delete_keys(session):
         keys = get_curr_keys(session["session_id"])
+        global shown_keys
         for k in keys:
             with get_db_session() as db_session:
                 db_session.delete(k)
                 db_session.commit()
+                shown_keys = [key for key in shown_keys if key != k.id]
         fh.add_toast(session, "Deleted keys.", "success")
         return (
             "",
@@ -1358,13 +1360,31 @@ def modal_get():  # noqa: C901
     @f_app.delete("/keys/select")
     def delete_select_keys(session, selected_keys: list[int] = None):
         if selected_keys:
+            global shown_keys
             with get_db_session() as db_session:
                 keys = db_session.query(ApiKey).filter(ApiKey.id.in_(selected_keys)).all()
                 for k in keys:
                     db_session.delete(k)
                     db_session.commit()
+                    shown_keys = [key for key in shown_keys if key != k.id]
             fh.add_toast(session, "Deleted keys.", "success")
-            return fh.RedirectResponse("/developer", status_code=303)  # TODO: replace with rerender of page instead
+            keys_present = bool(get_curr_keys(session["session_id"], number=1))
+            with get_db_session() as db_session:
+                remain_keys = db_session.query(ApiKey).filter(ApiKey.id.in_(shown_keys)).all()
+            remain_view = [key_view(ApiKeyRead.model_validate(k), session) for k in remain_keys]
+            return (
+                remain_view,
+                num_keys(len(get_curr_keys(session["session_id"])), "true"),
+                key_manage(
+                    keys_present,
+                    "true",
+                ),
+                key_load_more(
+                    keys_present,
+                    False,
+                    hx_swap_oob="true",
+                ),
+            )
         else:
             fh.add_toast(session, "No keys selected.", "warning")
             return fh.Response(status_code=204)
@@ -1378,6 +1398,8 @@ def modal_get():  # noqa: C901
             key = db_session.get(ApiKey, key_id)
             db_session.delete(key)
             db_session.commit()
+        global shown_keys
+        shown_keys = [key for key in shown_keys if key != key_id]
         fh.add_toast(session, "Deleted key.", "success")
         keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return (
@@ -1402,7 +1424,7 @@ def modal_get():  # noqa: C901
         session = req.session
         curr_gens = get_curr_gens(session["session_id"])
         if not curr_gens:
-            return fh.Response("No generations found.", media_type="text/plain")
+            return fh.Response(status_code=204)
 
         output = io.StringIO()
         writer = csv.writer(output)
@@ -1423,7 +1445,7 @@ def modal_get():  # noqa: C901
         session = req.session
         curr_keys = get_curr_keys(session["session_id"])
         if not curr_keys:
-            return fh.Response("No keys found.", media_type="text/plain")
+            return fh.Response(status_code=204)
 
         output = io.StringIO()
         writer = csv.writer(output)
@@ -1510,6 +1532,8 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
+# - add granular + bulk delete for gens
+
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add user authentication:
 #   - save gens and keys to user account
