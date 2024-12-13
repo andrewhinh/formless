@@ -364,6 +364,11 @@ def modal_get():  # noqa: C901
                             type="checkbox",
                             name="selected_keys",
                             value=k.id,
+                            hx_target="#key-manage",
+                            hx_swap="outerHTML",
+                            hx_trigger="change",
+                            hx_post="/show-select-key-delete",
+                            hx_indicator="#spinner",
                         ),
                         fh.P(
                             obscured_key,
@@ -532,17 +537,18 @@ def modal_get():  # noqa: C901
             cls="flex flex-col md:flex-row justify-center items-center gap-2 md:gap-4 w-full md:w-2/3",
         )
 
-    def key_manage(keys_present: bool, hx_swap_oob: bool = "false"):
+    def key_manage(keys_present: bool, keys_selected: bool = False, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Delete selected",
+                id="delete-selected-keys",
                 hx_delete="/keys/select",
                 hx_indicator="#spinner",
                 hx_target="#api-key-table",
                 hx_confirm="Are you sure?",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
-            if keys_present
+            if keys_present and keys_selected
             else None,
             fh.Button(
                 "Delete all",
@@ -1309,6 +1315,7 @@ def modal_get():  # noqa: C901
             num_keys(len(get_curr_keys(session["session_id"])), "true"),
             key_manage(
                 keys_present,
+                False,
                 "true",
             ),
             key_load_more(
@@ -1348,6 +1355,7 @@ def modal_get():  # noqa: C901
             num_keys(len(get_curr_keys(session["session_id"])), "true"),
             key_manage(
                 bool(get_curr_keys(session["session_id"], number=1)),
+                False,
                 "true",
             ),
             key_load_more(
@@ -1377,6 +1385,7 @@ def modal_get():  # noqa: C901
                 num_keys(len(get_curr_keys(session["session_id"])), "true"),
                 key_manage(
                     keys_present,
+                    False,
                     "true",
                 ),
                 key_load_more(
@@ -1388,6 +1397,10 @@ def modal_get():  # noqa: C901
         else:
             fh.add_toast(session, "No keys selected.", "warning")
             return fh.Response(status_code=204)
+
+    @f_app.post("/show-select-key-delete")
+    def show_select_key_delete(session, selected_keys: list[int] = None):
+        return key_manage(bool(get_curr_keys(session["session_id"], number=1)), selected_keys is not None)
 
     @f_app.delete("/key/{key_id}")
     def delete_key(
@@ -1407,6 +1420,7 @@ def modal_get():  # noqa: C901
             num_keys(len(get_curr_keys(session["session_id"])), "true"),
             key_manage(
                 keys_present,
+                False,
                 "true",
             ),
             key_load_more(
