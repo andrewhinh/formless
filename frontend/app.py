@@ -71,6 +71,7 @@ def modal_get():  # noqa: C901
     from sqlmodel import Session as DBSession
     from sqlmodel import create_engine, select
     from starlette.middleware.cors import CORSMiddleware
+    from starlette.responses import StreamingResponse
 
     from db.models import (
         ApiKey,
@@ -134,7 +135,7 @@ def modal_get():  # noqa: C901
                     from, to { border-color: transparent; }
                     50% { border-color: red; }
                 }
-                tr.htmx-swapping {
+                .htmx-swapping {
                     opacity: 0;
                     transition: opacity .25s ease-out;
                 }
@@ -173,17 +174,21 @@ def modal_get():  # noqa: C901
         session_id,
         number: int = None,
         offset: int = 0,
+        ids: list[int] = None,
     ) -> list[Gen]:
         with get_db_session() as db_session:
             query = select(Gen).where(Gen.session_id == session_id).order_by(Gen.request_at.desc()).offset(offset)
             if number:
                 query = query.limit(number)
+            if ids:
+                query = query.where(Gen.id.in_(ids))
             return db_session.exec(query).all()
 
     def get_curr_keys(
         session_id,
         number: int = None,
         offset: int = 0,
+        ids: list[int] = None,
     ) -> list[ApiKey]:
         with get_db_session() as db_session:
             query = (
@@ -191,6 +196,8 @@ def modal_get():  # noqa: C901
             )
             if number:
                 query = query.limit(number)
+            if ids:
+                query = query.where(ApiKey.id.in_(ids))
             return db_session.exec(query).all()
 
     def get_curr_balance() -> GlobalBalance:
@@ -250,43 +257,163 @@ def modal_get():  # noqa: C901
         if g.failed:
             return fh.Card(
                 fh.Div(
+                    fh.Input(
+                        type="checkbox",
+                        name="selected_gens",
+                        value=g.id,
+                        hx_target="#gen-manage",
+                        hx_swap="outerHTML",
+                        hx_trigger="change",
+                        hx_post="/show-select-gen-delete",
+                        hx_indicator="#spinner",
+                    ),
+                    fh.Button(
+                        fh.Svg(
+                            fh.NotStr(
+                                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
+                            ),
+                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                        ),
+                        hx_delete=f"/gen/{g.id}",
+                        hx_indicator="#spinner",
+                        hx_target="closest card",
+                        hx_swap="outerHTML swap:.25s",
+                        hx_confirm="Are you sure?",
+                    ),
+                    cls="w-1/2 flex justify-start items-center gap-2",
+                ),
+                fh.Div(
                     fh.Img(
                         src=image_src,
                         alt="Card image",
-                        cls="max-h-48 w-full object-contain",
+                        cls="max-h-60 max-w-60 object-contain",
                     ),
-                    cls="w-1/2",
+                    cls="w-3/6 flex justify-center items-center",
                 ),
                 fh.Div(
-                    fh.P(
-                        g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
-                        onclick=f"navigator.clipboard.writeText('{g.question}');",
-                        hx_post="/toast?message=Copied to clipboard!&type=success",
-                        hx_indicator="#spinner",
-                        hx_target="#toast-container",
-                        hx_swap="outerHTML",
-                        cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
-                        title="Click to copy",
+                    fh.Div(
+                        fh.P(
+                            g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
+                            onclick=f"navigator.clipboard.writeText('{g.question}');",
+                            hx_post="/toast?message=Copied to clipboard!&type=success",
+                            hx_indicator="#spinner",
+                            hx_target="#toast-container",
+                            hx_swap="outerHTML",
+                            cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
+                            title="Click to copy",
+                        ),
+                        fh.P(
+                            "Generation failed",
+                            cls="text-red-300",
+                        ),
+                        cls="flex flex-col justify-center items-center gap-2",
                     ),
-                    fh.P(
-                        "Generation failed",
-                        cls="text-red-300",
-                    ),
-                    cls="max-h-48 w-1/2 flex flex-col gap-2",
+                    cls="w-2/6",
                 ),
-                cls="max-h-60 w-full flex justify-between items-center gap-4",
+                cls="w-full flex justify-between items-center p-4",
                 id=f"gen-{g.id}",
             )
         elif g.response:
             return fh.Card(
                 fh.Div(
+                    fh.Input(
+                        type="checkbox",
+                        name="selected_gens",
+                        value=g.id,
+                        hx_target="#gen-manage",
+                        hx_swap="outerHTML",
+                        hx_trigger="change",
+                        hx_post="/show-select-gen-delete",
+                        hx_indicator="#spinner",
+                    ),
+                    fh.Button(
+                        fh.Svg(
+                            fh.NotStr(
+                                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
+                            ),
+                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                        ),
+                        hx_delete=f"/gen/{g.id}",
+                        hx_indicator="#spinner",
+                        hx_target="closest card",
+                        hx_swap="outerHTML swap:.25s",
+                        hx_confirm="Are you sure?",
+                    ),
+                    cls="w-1/6 flex justify-start items-center gap-2",
+                ),
+                fh.Div(
                     fh.Img(
                         src=image_src,
                         alt="Card image",
-                        cls="max-h-48 w-full object-contain",
+                        cls="max-h-60 max-w-60 object-contain",
                     ),
-                    cls="w-1/2",
+                    cls="w-3/6 flex justify-center items-center",
                 ),
+                fh.Div(
+                    fh.Div(
+                        fh.P(
+                            g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
+                            onclick=f"navigator.clipboard.writeText('{g.question}');",
+                            hx_post="/toast?message=Copied to clipboard!&type=success",
+                            hx_indicator="#spinner",
+                            hx_target="#toast-container",
+                            hx_swap="outerHTML",
+                            cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
+                            title="Click to copy",
+                        ),
+                        fh.P(
+                            g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
+                            onclick=f"navigator.clipboard.writeText('{g.response}');",
+                            hx_post="/toast?message=Copied to clipboard!&type=success",
+                            hx_indicator="#spinner",
+                            hx_target="#toast-container",
+                            hx_swap="outerHTML",
+                            cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                            title="Click to copy",
+                        ),
+                        cls="flex flex-col justify-center items-center gap-2",
+                    ),
+                    cls="w-2/6",
+                ),
+                cls="w-full flex justify-between items-center p-4",
+                id=f"gen-{g.id}",
+            )
+        return fh.Card(
+            fh.Div(
+                fh.Input(
+                    type="checkbox",
+                    name="selected_gens",
+                    value=g.id,
+                    hx_target="#gen-manage",
+                    hx_swap="outerHTML",
+                    hx_trigger="change",
+                    hx_post="/show-select-gen-delete",
+                    hx_indicator="#spinner",
+                ),
+                fh.Button(
+                    fh.Svg(
+                        fh.NotStr(
+                            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
+                        ),
+                        cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                    ),
+                    hx_delete=f"/gen/{g.id}",
+                    hx_indicator="#spinner",
+                    hx_target="closest card",
+                    hx_swap="outerHTML swap:.25s",
+                    hx_confirm="Are you sure?",
+                ),
+                cls="w-1/6 flex justify-start items-center gap-2",
+            ),
+            fh.Div(
+                fh.Img(
+                    src=image_src,
+                    alt="Card image",
+                    cls="max-h-60 max-w-60 object-contain",
+                ),
+                cls="w-3/6 flex justify-center items-center",
+            ),
+            fh.Div(
                 fh.Div(
                     fh.P(
                         g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
@@ -298,45 +425,12 @@ def modal_get():  # noqa: C901
                         cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
                         title="Click to copy",
                     ),
-                    fh.P(
-                        g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
-                        onclick=f"navigator.clipboard.writeText('{g.response}');",
-                        hx_post="/toast?message=Copied to clipboard!&type=success",
-                        hx_indicator="#spinner",
-                        hx_target="#toast-container",
-                        hx_swap="outerHTML",
-                        cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
-                        title="Click to copy",
-                    ),
-                    cls="max-h-48 w-1/2 flex flex-col gap-2",
+                    fh.P("Scanning image ..."),
+                    cls="flex flex-col justify-center items-center gap-2",
                 ),
-                cls="max-h-60 w-full flex justify-between items-center gap-4",
-                id=f"gen-{g.id}",
-            )
-        return fh.Card(
-            fh.Div(
-                fh.Img(
-                    src=image_src,
-                    alt="Card image",
-                    cls="max-h-48 w-full object-contain",
-                ),
-                cls="w-1/2",
+                cls="w-2/6",
             ),
-            fh.Div(
-                fh.P(
-                    g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
-                    onclick=f"navigator.clipboard.writeText('{g.question}');",
-                    hx_post="/toast?message=Copied to clipboard!&type=success",
-                    hx_indicator="#spinner",
-                    hx_target="#toast-container",
-                    hx_swap="outerHTML",
-                    cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
-                    title="Click to copy",
-                ),
-                fh.P("Scanning image ..."),
-                cls="max-h-48 w-1/2 flex flex-col gap-2",
-            ),
-            cls="max-h-60 w-full flex justify-between items-center gap-4",
+            cls="w-full flex justify-between items-center p-4",
             id=f"gen-{g.id}",
         )
 
@@ -346,11 +440,13 @@ def modal_get():  # noqa: C901
     ):
         with get_db_session() as db_session:
             if db_session.get(ApiKey, k.id) is None:
+                fh.add_toast(session, "Please refresh the page", "error")
                 return None
         if k.session_id != session["session_id"]:
             fh.add_toast(session, "Please refresh the page", "error")
             return None
         if not k.key or not k.granted_at:
+            fh.add_toast(session, "Please refresh the page", "error")
             return None
 
         obscured_key = k.key[:4] + "*" * (len(k.key) - 4)
@@ -370,6 +466,22 @@ def modal_get():  # noqa: C901
                             hx_post="/show-select-key-delete",
                             hx_indicator="#spinner",
                         ),
+                        fh.Button(
+                            fh.Svg(
+                                fh.NotStr(
+                                    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
+                                ),
+                                cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer hidden md:block",
+                            ),
+                            hx_delete=f"/key/{k.id}",
+                            hx_indicator="#spinner",
+                            hx_target="closest tr",
+                            hx_swap="outerHTML swap:.25s",
+                            hx_confirm="Are you sure?",
+                        ),
+                        cls="w-1/6 flex justify-start items-center gap-2",
+                    ),
+                    fh.Div(
                         fh.P(
                             obscured_key,
                             onmouseover=(
@@ -395,29 +507,16 @@ def modal_get():  # noqa: C901
                             title="Click to copy",
                             id=f"key-element-{k.id}",
                         ),
-                        cls="w-2/3 flex items-center gap-2",
+                        cls="w-3/6",
                     ),
                     fh.Div(
                         fh.P(
                             k.granted_at.strftime("%Y-%m-%d %H:%M:%S"),
                         ),
-                        fh.Button(
-                            fh.Svg(
-                                fh.NotStr(
-                                    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
-                                ),
-                                cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
-                            ),
-                            hx_delete=f"/key/{k.id}",
-                            hx_indicator="#spinner",
-                            hx_target="closest tr",
-                            hx_swap="outerHTML swap:.25s",
-                            hx_confirm="Are you sure?",
-                        ),
-                        cls="w-1/3 flex items-center gap-2",
+                        cls="w-2/6",
                     ),
                     id=f"key-{k.id}",
-                    cls="w-full flex justify-between items-center p-2",
+                    cls="w-full flex justify-between items-center p-4",
                 ),
                 cls="flex grow",
             ),
@@ -441,16 +540,19 @@ def modal_get():  # noqa: C901
             ),
         )
 
-    def balance_view(
-        gb: GlobalBalanceRead,
-    ):
-        with get_db_session() as db_session:
-            if db_session.get(GlobalBalance, gb.id) is None:
-                return None
-
+    def balance_view():
         return (
-            fh.P("Global balance:"),
-            fh.P(f"{gb.balance} credits", cls="font-bold"),
+            fh.Div(
+                fh.P("Global balance:"),
+                fh.P(
+                    f"{GlobalBalanceRead.model_validate(get_curr_balance()).balance} credits",
+                    cls="font-bold",
+                    hx_ext="sse",
+                    sse_connect="/stream-balance",
+                    sse_swap="UpdateBalance",
+                ),
+                cls="flex items-start gap-0.5 md:gap-1",
+            ),
         )
 
     def gen_form_toggle(gen_form: str, hx_swap_oob: bool = "false"):
@@ -486,9 +588,6 @@ def modal_get():  # noqa: C901
         return fh.Div(
             fh.P(
                 f"({gen_count} total generations)",
-                hx_ext="sse",
-                sse_connect="/stream-gen-count",
-                sse_swap="UpdateGensCount",
                 cls="text-blue-300 text-md whitespace-nowrap",
             ),
             id="gen-count",
@@ -507,14 +606,23 @@ def modal_get():  # noqa: C901
             cls="w-auto h-full flex justify-center items-center",
         )
 
-    def gen_manage(gens_present: bool, hx_swap_oob: bool = "false"):
+    def gen_manage(gens_present: bool, gens_selected: bool = False, hx_swap_oob: bool = "false"):
         return fh.Div(
+            fh.Button(
+                "Delete selected",
+                hx_delete="/gens/select",
+                hx_indicator="#spinner",
+                hx_target="#gen-list",
+                hx_confirm="Are you sure?",
+                cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
+            )
+            if gens_present and gens_selected
+            else None,
             fh.Button(
                 "Delete all",
                 hx_delete="/gens",
                 hx_indicator="#spinner",
-                hx_target="body",
-                hx_push_url="true",
+                hx_target="#gen-list",
                 hx_confirm="Are you sure?",
                 cls="text-red-300 hover:text-red-100 p-2 border-red-300 border-2 hover:border-red-100 w-full h-full",
             )
@@ -534,14 +642,13 @@ def modal_get():  # noqa: C901
             else None,
             id="gen-manage",
             hx_swap_oob=hx_swap_oob if hx_swap_oob != "false" else None,
-            cls="flex flex-col md:flex-row justify-center items-center gap-2 md:gap-4 w-full md:w-2/3",
+            cls="flex flex-col md:flex-row justify-center items-center gap-4 w-full",
         )
 
     def key_manage(keys_present: bool, keys_selected: bool = False, hx_swap_oob: bool = "false"):
         return fh.Div(
             fh.Button(
                 "Delete selected",
-                id="delete-selected-keys",
                 hx_delete="/keys/select",
                 hx_indicator="#spinner",
                 hx_target="#api-key-table",
@@ -654,7 +761,7 @@ def modal_get():  # noqa: C901
                 """
                 ),
                 id="spinner",
-                cls="htmx-indicator w-8 h-8 absolute top-4 left-1/2 transform -translate-x-1/2 fill-blue-300",
+                cls="htmx-indicator w-8 h-8 absolute top-12 md:top-6 left-1/2 transform -translate-x-1/2 fill-blue-300",
             ),
             fh.Div(
                 fh.A(
@@ -709,14 +816,18 @@ def modal_get():  # noqa: C901
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center items-center",
             ),
             num_gens(len(get_curr_gens(session["session_id"]))),
-            gen_manage(gens_present),
-            fh.Div(
-                get_gen_table_part(session),
-                id="gen-list",
-                cls="flex flex-col justify-center items-center gap-2 w-full md:w-2/3",
-                hx_ext="sse",
-                sse_connect="/stream-gens",
-                sse_swap="UpdateGens",
+            fh.Form(
+                gen_manage(gens_present),
+                fh.Div(
+                    get_gen_table_part(session),
+                    id="gen-list",
+                    cls="w-full flex flex-col gap-2",
+                    hx_ext="sse",
+                    sse_connect="/stream-gens",
+                    hx_swap="outerHTML",
+                    sse_swap="UpdateGens",
+                ),
+                cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
             gen_load_more(
                 gens_present, len(get_curr_gens(session["session_id"], number=max_gens, offset=max_gens)) > 0
@@ -745,9 +856,9 @@ def modal_get():  # noqa: C901
                     fh.Thead(
                         fh.Tr(
                             fh.Th(
-                                fh.P("Key", cls="font-bold w-2/3"),
-                                fh.P("Granted At", cls="font-bold w-1/3"),
-                                cls="w-full flex justify-between items-center p-2",
+                                fh.P("Key", cls="font-bold w-3/6"),
+                                fh.P("Granted At", cls="font-bold w-2/6"),
+                                cls="w-full flex justify-end items-center p-4",
                             ),
                             cls="flex grow",
                         ),
@@ -756,7 +867,7 @@ def modal_get():  # noqa: C901
                         get_key_table_part(session),
                         id="api-key-table",
                     ),
-                    cls="w-full text-sm md:text-lg flex flex-col gap-2 border-slate-500 border-2",
+                    cls="w-full text-sm md:text-lg flex flex-col border-slate-500 border-2",
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
@@ -772,14 +883,7 @@ def modal_get():  # noqa: C901
     def footer():
         return fh.Footer(
             fh.Div(
-                fh.Div(
-                    balance_view(GlobalBalanceRead.model_validate(get_curr_balance())),
-                    id="balance",
-                    cls="flex items-start gap-0.5 md:gap-1",
-                    hx_ext="sse",
-                    sse_connect="/stream-balance",
-                    sse_swap="UpdateBalance",
-                ),
+                balance_view(),
                 fh.P(
                     fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
                     " to share ($1)",
@@ -868,15 +972,15 @@ def modal_get():  # noqa: C901
         k = generate_key_and_save(k)
 
         # TODO: uncomment for debugging
-        # g.sqlmodel_update({"response": "temp"})  # have to use sqlmodel_update since object is already committed
-        # with get_db_session() as db_session:
-        #     db_session.add(g)
-        #     db_session.commit()
-        #     db_session.refresh(g)
-        #     return
+        g.response = "temp"
+        with get_db_session() as db_session:
+            db_session.add(g)
+            db_session.commit()
+            db_session.refresh(g)
+            return
 
         # TODO: uncomment for debugging
-        # g.sqlmodel_update({"failed": True})
+        # g.failed = True
         # with get_db_session() as db_session:
         #     db_session.add(g)
         #     db_session.commit()
@@ -901,9 +1005,9 @@ def modal_get():  # noqa: C901
 
         if not response.ok:
             fh.add_toast(session, "Failed with status code: " + str(response.status_code), "error")
-            g.sqlmodel_update({"failed": True})
+            g.failed = True
         else:
-            g.sqlmodel_update({"response": response.json()})
+            g.response = response.json()
         with get_db_session() as db_session:
             db_session.add(g)
             db_session.commit()
@@ -926,40 +1030,31 @@ def modal_get():  # noqa: C901
     ):
         while not shutdown_event.is_set():
             global shown_generations
-            shown_ids = list(shown_generations.keys())
-            if not shown_ids:
-                yield fh.sse_message(get_gen_table_part(session))
-
-            curr_gens = get_curr_gens(session["session_id"], number=len(shown_ids), offset=min(shown_ids, default=0))
+            curr_gens = get_curr_gens(session["session_id"], ids=list(shown_generations.keys()))
             read_gens = [GenRead.model_validate(g) for g in curr_gens]
-            inner_content = ""
+            content = []
             updated = False
             for g in read_gens:
                 current_state = "response" if g.response else "failed" if g.failed else "loading"
                 if shown_generations.get(g.id) != current_state:
                     shown_generations[g.id] = current_state
                     updated = True
-                inner_content += str(gen_view(g, session))
+                content.append(gen_view(g, session))
             if updated:
-                yield fh.sse_message(fh.NotStr(inner_content[::-1]))
-            await sleep(1)
-
-    async def stream_gen_count_updates(
-        session,
-    ):
-        while not shutdown_event.is_set():
-            curr_gens = get_curr_gens(session["session_id"])
-            if len(curr_gens) != len(shown_generations):
-                yield fh.sse_message(num_gens(len(curr_gens)))
+                yield f"""event: UpdateGens\ndata: {fh.to_xml(fh.Div(
+                    *content[::-1],
+                    id="gen-list",
+                    cls="w-full flex flex-col gap-2",
+                    sse_swap="UpdateGens",
+                ),)}\n\n"""
             await sleep(1)
 
     async def stream_balance_updates():
         while not shutdown_event.is_set():
-            curr_balance = get_curr_balance()
             global shown_balance
-            if shown_balance != curr_balance.balance:
-                shown_balance = curr_balance.balance
-                yield fh.sse_message(balance_view(GlobalBalanceRead.model_validate(curr_balance)))
+            if shown_balance != get_curr_balance().balance:
+                shown_balance = get_curr_balance().balance
+                yield f"""event: UpdateBalance\ndata: {fh.to_xml(fh.P(f"{shown_balance} credits", cls="font-bold", sse_swap="UpdateBalance"))}\n\n"""
             await sleep(1)
 
     ## pagination
@@ -967,12 +1062,18 @@ def modal_get():  # noqa: C901
         curr_gens = get_curr_gens(session["session_id"], number=size, offset=(part_num - 1) * size)
         read_gens = [GenRead.model_validate(g) for g in curr_gens]
         paginated = [gen_view(g, session) for g in read_gens]
+        if part_num == 1:
+            global shown_generations
+            shown_generations = {g.id: "loading" for g in read_gens}
         return tuple(paginated)
 
     def get_key_table_part(session, part_num: int = 1, size: int = max_keys):
         curr_keys = get_curr_keys(session["session_id"], number=size, offset=(part_num - 1) * size)
         read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
         paginated = [key_view(k, session) for k in read_keys]
+        if part_num == 1:
+            global shown_keys
+            shown_keys = {k.id: "loading" for k in read_keys}
         return tuple(paginated)
 
     # routes
@@ -1040,22 +1141,15 @@ def modal_get():  # noqa: C901
             ),
         )
 
-    ## SSE streams
     @f_app.get("/stream-gens")
-    async def stream_gens(
-        session,
-    ):
-        return fh.EventStream(stream_gen_updates(session))
-
-    @f_app.get("/stream-gen-count")
-    async def stream_gen_count(
-        session,
-    ):
-        return fh.EventStream(stream_gen_count_updates(session))
+    async def stream_gens(session):
+        """Stream generation updates to connected clients"""
+        return StreamingResponse(stream_gen_updates(session), media_type="text/event-stream")
 
     @f_app.get("/stream-balance")
     async def stream_balance():
-        return fh.EventStream(stream_balance_updates())
+        """Stream balance updates to connected clients"""
+        return StreamingResponse(stream_balance_updates(), media_type="text/event-stream")
 
     ## gen form view
     @f_app.get("/get-gen-form")
@@ -1195,7 +1289,7 @@ def modal_get():  # noqa: C901
             return None
 
         # Decrement balance
-        curr_balance.sqlmodel_update({"balance": curr_balance.balance - 1})
+        curr_balance.balance -= 1
         with get_db_session() as db_session:
             db_session.add(curr_balance)
             db_session.commit()
@@ -1217,6 +1311,8 @@ def modal_get():  # noqa: C901
         )
         ## need to put in db since generate_and_save is threaded
         g = Gen.model_validate(g)
+        global shown_generations
+        shown_generations[g.id] = "loading"
         with get_db_session() as db_session:
             db_session.add(g)
             db_session.commit()
@@ -1229,10 +1325,10 @@ def modal_get():  # noqa: C901
             clear_img_input,
             clear_q_input,
             num_gens(len(get_curr_gens(session["session_id"])), "true"),
-            gen_manage(gens_present, "true"),
+            gen_manage(gens_present, False, "true"),
             gen_load_more(
                 gens_present,
-                False,  # TODO: fix pagination when new results are added
+                False,
                 hx_swap_oob="true",
             ),
         )
@@ -1257,7 +1353,7 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "Out of balance!", "error")
             return None
 
-        curr_balance.sqlmodel_update({"balance": curr_balance.balance - 1})
+        curr_balance.balance -= 1
         with get_db_session() as db_session:
             db_session.add(curr_balance)
             db_session.commit()
@@ -1291,7 +1387,7 @@ def modal_get():  # noqa: C901
             clear_img_input,
             clear_q_input,
             num_gens(len(get_curr_gens(session["session_id"])), "true"),
-            gen_manage(gens_present, "true"),
+            gen_manage(gens_present, False, "true"),
             gen_load_more(
                 gens_present,
                 False,
@@ -1331,14 +1427,29 @@ def modal_get():  # noqa: C901
         session,
     ):
         gens = get_curr_gens(session["session_id"])
+        global shown_generations
         for g in gens:
             if g and g.image_file and os.path.exists(g.image_file):
                 os.remove(g.image_file)
             with get_db_session() as db_session:
                 db_session.delete(g)
                 db_session.commit()
-        fh.add_toast(session, "Deleted generations and image files.", "success")
-        return fh.RedirectResponse("/", status_code=303)
+            shown_generations.pop(g.id, None)
+        fh.add_toast(session, "Deleted generations.", "success")
+        return (
+            "",
+            num_gens(len(get_curr_gens(session["session_id"])), "true"),
+            gen_manage(
+                bool(get_curr_gens(session["session_id"], number=1)),
+                False,
+                "true",
+            ),
+            gen_load_more(
+                bool(get_curr_gens(session["session_id"], number=1)),
+                False,
+                hx_swap_oob="true",
+            ),
+        )
 
     @f_app.delete("/keys")
     def delete_keys(session):
@@ -1348,7 +1459,7 @@ def modal_get():  # noqa: C901
             with get_db_session() as db_session:
                 db_session.delete(k)
                 db_session.commit()
-                shown_keys = [key for key in shown_keys if key != k.id]
+            shown_keys = [key for key in shown_keys if key != k.id]
         fh.add_toast(session, "Deleted keys.", "success")
         return (
             "",
@@ -1365,21 +1476,54 @@ def modal_get():  # noqa: C901
             ),
         )
 
+    @f_app.delete("/gens/select")
+    def delete_select_gens(session, selected_gens: list[int] = None):
+        if selected_gens:
+            global shown_generations
+            select_gens = get_curr_gens(session["session_id"], ids=selected_gens)
+            with get_db_session() as db_session:
+                for g in select_gens:
+                    if g and g.image_file and os.path.exists(g.image_file):
+                        os.remove(g.image_file)
+                    db_session.delete(g)
+                    db_session.commit()
+                    shown_generations.pop(g.id, None)
+            fh.add_toast(session, "Deleted generations.", "success")
+            gens_present = bool(get_curr_gens(session["session_id"], number=1))
+            remain_gens = get_curr_gens(session["session_id"], ids=list(shown_generations.keys()))
+            remain_view = [gen_view(GenRead.model_validate(g), session) for g in remain_gens[::-1]]
+            return (
+                remain_view,
+                num_gens(len(get_curr_gens(session["session_id"])), "true"),
+                gen_manage(
+                    gens_present,
+                    False,
+                    "true",
+                ),
+                gen_load_more(
+                    gens_present,
+                    False,
+                    hx_swap_oob="true",
+                ),
+            )
+        else:
+            fh.add_toast(session, "No generations selected.", "warning")
+            return fh.Response(status_code=204)
+
     @f_app.delete("/keys/select")
     def delete_select_keys(session, selected_keys: list[int] = None):
         if selected_keys:
             global shown_keys
+            select_keys = get_curr_keys(session["session_id"], ids=selected_keys)
             with get_db_session() as db_session:
-                keys = db_session.query(ApiKey).filter(ApiKey.id.in_(selected_keys)).all()
-                for k in keys:
+                for k in select_keys:
                     db_session.delete(k)
                     db_session.commit()
                     shown_keys = [key for key in shown_keys if key != k.id]
             fh.add_toast(session, "Deleted keys.", "success")
             keys_present = bool(get_curr_keys(session["session_id"], number=1))
-            with get_db_session() as db_session:
-                remain_keys = db_session.query(ApiKey).filter(ApiKey.id.in_(shown_keys)).all()
-            remain_view = [key_view(ApiKeyRead.model_validate(k), session) for k in remain_keys]
+            remain_keys = get_curr_keys(session["session_id"], ids=list(shown_keys))
+            remain_view = [key_view(ApiKeyRead.model_validate(k), session) for k in remain_keys[::-1]]
             return (
                 remain_view,
                 num_keys(len(get_curr_keys(session["session_id"])), "true"),
@@ -1398,9 +1542,43 @@ def modal_get():  # noqa: C901
             fh.add_toast(session, "No keys selected.", "warning")
             return fh.Response(status_code=204)
 
+    @f_app.post("/show-select-gen-delete")
+    def show_select_gen_delete(session, selected_gens: list[int] = None):
+        return gen_manage(bool(get_curr_gens(session["session_id"], number=1)), selected_gens is not None)
+
     @f_app.post("/show-select-key-delete")
     def show_select_key_delete(session, selected_keys: list[int] = None):
         return key_manage(bool(get_curr_keys(session["session_id"], number=1)), selected_keys is not None)
+
+    @f_app.delete("/gen/{gen_id}")
+    def delete_gen(
+        session,
+        gen_id: int,
+    ):
+        with get_db_session() as db_session:
+            gen = db_session.get(Gen, gen_id)
+            if gen and gen.image_file and os.path.exists(gen.image_file):
+                os.remove(gen.image_file)
+            db_session.delete(gen)
+            db_session.commit()
+        global shown_generations
+        shown_generations.pop(gen_id, None)
+        fh.add_toast(session, "Deleted generation.", "success")
+        gens_present = bool(get_curr_gens(session["session_id"], number=1))
+        return (
+            "",
+            num_gens(len(get_curr_gens(session["session_id"])), "true"),
+            gen_manage(
+                gens_present,
+                False,
+                "true",
+            ),
+            gen_load_more(
+                gens_present,
+                False,
+                hx_swap_oob="true",
+            ),
+        )
 
     @f_app.delete("/key/{key_id}")
     def delete_key(
@@ -1535,7 +1713,7 @@ def modal_get():  # noqa: C901
             # session = event["data"]["object"]
             # print("Session completed", session)
             curr_balance = get_curr_balance()
-            curr_balance.sqlmodel_update({"balance": curr_balance.balance + 50})
+            curr_balance.balance += 50
             with get_db_session() as db_session:
                 db_session.add(curr_balance)
                 db_session.commit()
@@ -1546,8 +1724,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - add granular + bulk delete for gens
-
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add user authentication:
 #   - save gens and keys to user account
