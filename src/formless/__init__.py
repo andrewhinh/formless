@@ -122,3 +122,7 @@ def main(
 
 # TODO:
 # - add multiple uploads/urls
+# - add user authentication:
+#   - save gens and keys to user account
+#   - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+#       - Only allow authorized users to upload files: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html

@@ -366,11 +366,12 @@ def main():
     assert response.ok, response.status_code
 
 
-# TODO:
-# - add load testing:
-#     - https://github.com/andrewhinh/admirer/blob/main/load_test/locust.ipynb
-#     - https://github.com/andrewhinh/admirer/blob/main/load_test/locust_http_user.py
-# - add multiple uploads/urls
-
+# TODO
 # - Replace with custom model impl FT on hard images
 # - Add custom CUDA kernels for faster inference
+
+# - add multiple uploads/urls
+# - add user authentication:
+#   - save gens and keys to user account
+#   - complete file upload security: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+#       - Only allow authorized users to upload files: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
