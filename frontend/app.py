@@ -230,6 +230,8 @@ def modal_get():  # noqa: C901
     max_keys = 20
 
     # ui
+    limit_chars = 100
+
     ## components
     def gen_view(
         g: GenRead,
@@ -253,7 +255,6 @@ def modal_get():  # noqa: C901
                 f.write(open(g.image_file, "rb").read())
             image_src = f"/{Path(g.image_file).name}"
 
-        limit_chars = 100
         if g.failed:
             return fh.Card(
                 fh.Div(
@@ -272,7 +273,7 @@ def modal_get():  # noqa: C901
                             fh.NotStr(
                                 """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                             ),
-                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden",
                         ),
                         hx_delete=f"/gen/{g.id}",
                         hx_indicator="#spinner",
@@ -286,7 +287,7 @@ def modal_get():  # noqa: C901
                     fh.Img(
                         src=image_src,
                         alt="Card image",
-                        cls="max-h-60 max-w-60 object-contain",
+                        cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                     ),
                     cls="w-3/6 flex justify-center items-center",
                 ),
@@ -305,6 +306,9 @@ def modal_get():  # noqa: C901
                         fh.P(
                             "Generation failed",
                             cls="text-red-300",
+                            hx_ext="sse",
+                            sse_connect=f"/stream-gens/{g.id}",
+                            sse_swap="UpdateGens",
                         ),
                         cls="flex flex-col justify-center items-center gap-2",
                     ),
@@ -331,7 +335,7 @@ def modal_get():  # noqa: C901
                             fh.NotStr(
                                 """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                             ),
-                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden",
                         ),
                         hx_delete=f"/gen/{g.id}",
                         hx_indicator="#spinner",
@@ -345,7 +349,7 @@ def modal_get():  # noqa: C901
                     fh.Img(
                         src=image_src,
                         alt="Card image",
-                        cls="max-h-60 max-w-60 object-contain",
+                        cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                     ),
                     cls="w-3/6 flex justify-center items-center",
                 ),
@@ -370,6 +374,9 @@ def modal_get():  # noqa: C901
                             hx_swap="outerHTML",
                             cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
                             title="Click to copy",
+                            hx_ext="sse",
+                            sse_connect=f"/stream-gens/{g.id}",
+                            sse_swap="UpdateGens",
                         ),
                         cls="flex flex-col justify-center items-center gap-2",
                     ),
@@ -395,7 +402,7 @@ def modal_get():  # noqa: C901
                         fh.NotStr(
                             """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                         ),
-                        cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer",
+                        cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden",
                     ),
                     hx_delete=f"/gen/{g.id}",
                     hx_indicator="#spinner",
@@ -409,7 +416,7 @@ def modal_get():  # noqa: C901
                 fh.Img(
                     src=image_src,
                     alt="Card image",
-                    cls="max-h-60 max-w-60 object-contain",
+                    cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                 ),
                 cls="w-3/6 flex justify-center items-center",
             ),
@@ -425,7 +432,12 @@ def modal_get():  # noqa: C901
                         cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
                         title="Click to copy",
                     ),
-                    fh.P("Scanning image ..."),
+                    fh.P(
+                        "Scanning image ...",
+                        hx_ext="sse",
+                        sse_connect=f"/stream-gens/{g.id}",
+                        sse_swap="UpdateGens",
+                    ),
                     cls="flex flex-col justify-center items-center gap-2",
                 ),
                 cls="w-2/6",
@@ -822,10 +834,6 @@ def modal_get():  # noqa: C901
                     get_gen_table_part(session),
                     id="gen-list",
                     cls="w-full flex flex-col gap-2",
-                    hx_ext="sse",
-                    sse_connect="/stream-gens",
-                    hx_swap="outerHTML",
-                    sse_swap="UpdateGens",
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
@@ -972,12 +980,12 @@ def modal_get():  # noqa: C901
         k = generate_key_and_save(k)
 
         # TODO: uncomment for debugging
-        g.response = "temp"
-        with get_db_session() as db_session:
-            db_session.add(g)
-            db_session.commit()
-            db_session.refresh(g)
-            return
+        # g.response = "temp"
+        # with get_db_session() as db_session:
+        #     db_session.add(g)
+        #     db_session.commit()
+        #     db_session.refresh(g)
+        #     return
 
         # TODO: uncomment for debugging
         # g.failed = True
@@ -1027,26 +1035,35 @@ def modal_get():  # noqa: C901
     ## SSE helpers
     async def stream_gen_updates(
         session,
+        id: int,
     ):
         while not shutdown_event.is_set():
+            curr_gen = get_curr_gens(session["session_id"], ids=[id])[0]
+            curr_state = "response" if curr_gen.response else "failed" if curr_gen.failed else "loading"
             global shown_generations
-            curr_gens = get_curr_gens(session["session_id"], ids=list(shown_generations.keys()))
-            read_gens = [GenRead.model_validate(g) for g in curr_gens]
-            content = []
-            updated = False
-            for g in read_gens:
-                current_state = "response" if g.response else "failed" if g.failed else "loading"
-                if shown_generations.get(g.id) != current_state:
-                    shown_generations[g.id] = current_state
-                    updated = True
-                content.append(gen_view(g, session))
-            if updated:
-                yield f"""event: UpdateGens\ndata: {fh.to_xml(fh.Div(
-                    *content[::-1],
-                    id="gen-list",
-                    cls="w-full flex flex-col gap-2",
-                    sse_swap="UpdateGens",
-                ),)}\n\n"""
+            if shown_generations.get(id) != curr_state:
+                shown_generations[id] = curr_state
+                yield f"""event: UpdateGen\ndata: {fh.to_xml(
+                    fh.P(
+                        "Scanning image ...",
+                        sse_swap="UpdateGens",
+                    ) if curr_state == "loading" else
+                    fh.P(
+                        curr_gen.response[:limit_chars] + ("..." if len(curr_gen.response) > limit_chars else ""),
+                        onclick=f"navigator.clipboard.writeText('{curr_gen.response}');",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_indicator="#spinner",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                        title="Click to copy",
+                        sse_swap="UpdateGens",
+                    ) if curr_state == "response" else
+                    fh.P(
+                        "Generation failed",
+                        cls="text-red-300",
+                        sse_swap="UpdateGens",
+                    ))}\n\n"""
             await sleep(1)
 
     async def stream_balance_updates():
@@ -1062,18 +1079,12 @@ def modal_get():  # noqa: C901
         curr_gens = get_curr_gens(session["session_id"], number=size, offset=(part_num - 1) * size)
         read_gens = [GenRead.model_validate(g) for g in curr_gens]
         paginated = [gen_view(g, session) for g in read_gens]
-        if part_num == 1:
-            global shown_generations
-            shown_generations = {g.id: "loading" for g in read_gens}
         return tuple(paginated)
 
     def get_key_table_part(session, part_num: int = 1, size: int = max_keys):
         curr_keys = get_curr_keys(session["session_id"], number=size, offset=(part_num - 1) * size)
         read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
         paginated = [key_view(k, session) for k in read_keys]
-        if part_num == 1:
-            global shown_keys
-            shown_keys = {k.id: "loading" for k in read_keys}
         return tuple(paginated)
 
     # routes
@@ -1141,10 +1152,10 @@ def modal_get():  # noqa: C901
             ),
         )
 
-    @f_app.get("/stream-gens")
-    async def stream_gens(session):
+    @f_app.get("/stream-gens/{id}")
+    async def stream_gens(session, id: int):
         """Stream generation updates to connected clients"""
-        return StreamingResponse(stream_gen_updates(session), media_type="text/event-stream")
+        return StreamingResponse(stream_gen_updates(session, id), media_type="text/event-stream")
 
     @f_app.get("/stream-balance")
     async def stream_balance():
@@ -1311,12 +1322,12 @@ def modal_get():  # noqa: C901
         )
         ## need to put in db since generate_and_save is threaded
         g = Gen.model_validate(g)
-        global shown_generations
-        shown_generations[g.id] = "loading"
         with get_db_session() as db_session:
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
+        global shown_generations
+        shown_generations[g.id] = "loading"
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
         gens_present = bool(get_curr_gens(session["session_id"], number=1))
@@ -1379,6 +1390,8 @@ def modal_get():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
+        global shown_generations
+        shown_generations[g.id] = "loading"
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
         gens_present = bool(get_curr_gens(session["session_id"], number=1))
