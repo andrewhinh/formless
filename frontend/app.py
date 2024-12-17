@@ -9,16 +9,15 @@ from utils import (
     IN_PROD,
     MINUTES,
     NAME,
+    PARENT_PATH,
     PYTHON_VERSION,
     REMOTE_DB_URI,
     VOLUME_CONFIG,
 )
 
-parent_path: Path = Path(__file__).parent
-
-
 # Modal
-SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if IN_PROD else ".env.dev")]
+FE_PATH = PARENT_PATH / "frontend"
+SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
 IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .apt_install("git")
@@ -32,8 +31,8 @@ IMAGE = (
         "pillow==11.0.0",
         "sqlmodel==0.0.22",
     )
-    .copy_local_file(parent_path / "favicon.ico", "/root/favicon.ico")
-    .copy_local_dir(parent_path.parent / "db", "/root/db")
+    .copy_local_file(FE_PATH / "favicon.ico", "/root/favicon.ico")
+    .copy_local_dir(PARENT_PATH / "db", "/root/db")
 )
 
 FE_TIMEOUT = 24 * 60 * MINUTES  # max
@@ -162,7 +161,7 @@ def modal_get():  # noqa: C901
 
     engine = create_engine(
         url=REMOTE_DB_URI,
-        # echo=not IN_PROD,
+        echo=not IN_PROD,
     )
 
     @contextmanager
@@ -250,7 +249,7 @@ def modal_get():  # noqa: C901
         if g.image_url and validate_image_url(g.image_url):
             image_src = g.image_url
         elif g.image_file and isinstance(validate_image_file(image_file=None, upload_path=Path(g.image_file)), Path):
-            temp_path = parent_path / Path(g.image_file).name
+            temp_path = FE_PATH / Path(g.image_file).name
             with open(temp_path, "wb") as f:
                 f.write(open(g.image_file, "rb").read())
             image_src = f"/{Path(g.image_file).name}"
@@ -1091,7 +1090,7 @@ def modal_get():  # noqa: C901
     ## for images, CSS, etc.
     @f_app.get("/{fname:path}.{ext:static}")
     def static_files(fname: str, ext: str):
-        static_file_path = parent_path / f"{fname}.{ext}"
+        static_file_path = FE_PATH / f"{fname}.{ext}"
         if static_file_path.exists():
             return fh.FileResponse(static_file_path)
 

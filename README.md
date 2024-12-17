@@ -165,7 +165,7 @@ uv run tune download meta-llama/Llama-3.2-11B-Vision-Instruct --output-dir /tmp/
 Run the training:
 
 ```bash
-10:10 $ uv run tune run lora_finetune_single_device --config training/llama3_2_vision-11B_lora_single_device.yaml
+uv run tune run lora_finetune_single_device --config training/llama3_2_vision-11B_lora_single_device.yaml
 ```
 
 #### Custom
