@@ -12,13 +12,11 @@ from utils import (
     IN_PROD,
     MINUTES,
     NAME,
+    PARENT_PATH,
     REMOTE_DB_URI,
     VOLUME_CONFIG,
     Colors,
 )
-
-parent_path: Path = Path(__file__).parent
-db_dir_path = parent_path.parent / "db"
 
 # -----------------------------------------------------------------------------
 
@@ -56,7 +54,7 @@ def download_model():
 
 
 # Modal
-SECRETS = [modal.Secret.from_dotenv(path=parent_path, filename=".env" if IN_PROD else ".env.dev")]
+SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
 IMAGE = (
     GPU_IMAGE.pip_install(  # add Python dependencies
         "vllm==0.6.2",
@@ -71,7 +69,7 @@ IMAGE = (
         secrets=SECRETS,
         volumes=VOLUME_CONFIG,
     )
-    .copy_local_dir(parent_path.parent / "db", "/root/db")
+    .copy_local_dir(PARENT_PATH / "db", "/root/db")
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
