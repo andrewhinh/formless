@@ -1,6 +1,6 @@
 # formless
 
-Handwritten + image OCR.
+Hard handwriting understanding.
 
 ## Usage
 
