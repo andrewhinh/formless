@@ -87,19 +87,7 @@ app = modal.App(name=APP_NAME)
 
 # -----------------------------------------------------------------------------
 
-
-# Main API
-@app.function(
-    image=IMAGE,
-    gpu=GPU_CONFIG,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=API_TIMEOUT,
-    container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
-)
-@modal.asgi_app()
-def modal_get():  # noqa: C901
+with IMAGE.imports():
     import os
     import secrets
     import subprocess
@@ -121,6 +109,19 @@ def modal_get():  # noqa: C901
 
     from db.models import ApiKey, ApiKeyCreate
 
+
+# Main API
+@app.function(
+    image=IMAGE,
+    gpu=GPU_CONFIG,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=API_TIMEOUT,
+    container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
+    allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
+)
+@modal.asgi_app()
+def modal_get():  # noqa: C901
     ## setup
     f_app = FastAPI()
     engine = create_engine(
