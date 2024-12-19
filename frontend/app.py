@@ -44,16 +44,7 @@ APP_NAME = f"{NAME}-frontend"
 app = modal.App(APP_NAME)
 
 
-@app.function(
-    image=IMAGE,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=FE_TIMEOUT,
-    container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
-)
-@modal.asgi_app()
-def modal_get():  # noqa: C901
+with IMAGE.imports():
     import csv
     import io
     import subprocess
@@ -85,6 +76,17 @@ def modal_get():  # noqa: C901
         init_balance,
     )
 
+
+@app.function(
+    image=IMAGE,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=FE_TIMEOUT,
+    container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
+    allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
+)
+@modal.asgi_app()
+def modal_get():  # noqa: C901
     # setup
     def before(req, sess):
         req.scope["session_id"] = sess.setdefault("session_id", str(uuid.uuid4()))

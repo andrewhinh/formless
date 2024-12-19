@@ -62,13 +62,7 @@ app = modal.App(name=APP_NAME)
 # -----------------------------------------------------------------------------
 
 
-@app.function(
-    image=IMAGE,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
-)
-def run():  # noqa: C901
+with IMAGE.imports():
     import cairo
     import matplotlib.pyplot as plt
 
@@ -82,6 +76,14 @@ def run():  # noqa: C901
     from term_image.image import from_file
     from tqdm import tqdm
 
+
+@app.function(
+    image=IMAGE,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def run():  # noqa: C901
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     ImageFile.LOAD_TRUNCATED_IMAGES = True
 
