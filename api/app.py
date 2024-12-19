@@ -4,7 +4,7 @@ from pathlib import Path
 import modal
 
 from utils import (
-    DATA_VOLUME,
+    DB_VOLUME,
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
@@ -14,6 +14,7 @@ from utils import (
     NAME,
     PARENT_PATH,
     REMOTE_DB_URI,
+    SECRETS,
     VOLUME_CONFIG,
     Colors,
 )
@@ -54,7 +55,6 @@ def download_model():
 
 
 # Modal
-SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
 IMAGE = (
     GPU_IMAGE.pip_install(  # add Python dependencies
         "vllm==0.6.2",
@@ -128,7 +128,7 @@ def modal_get():  # noqa: C901
         echo=not IN_PROD,
     )
     ImageFile.LOAD_TRUNCATED_IMAGES = True
-    upload_dir = Path(f"/{DATA_VOLUME}/uploads")
+    upload_dir = Path(f"/{DB_VOLUME}/uploads")
     upload_dir.mkdir(exist_ok=True)
 
     @contextmanager
@@ -151,7 +151,7 @@ def modal_get():  # noqa: C901
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
         engine.dispose()
-        VOLUME_CONFIG[f"/{DATA_VOLUME}"].reload()
+        VOLUME_CONFIG[f"/{DB_VOLUME}"].reload()
         with get_db_session() as db_session:
             if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
                 return True
@@ -368,6 +368,7 @@ def main():
 # - Replace with custom model impl FT on hard images
 # - Add custom CUDA kernels for faster inference
 
+# - move to postgres
 # - add multiple uploads/urls
 # - add user authentication:
 #   - save gens and keys to user account

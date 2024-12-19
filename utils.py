@@ -10,27 +10,29 @@ DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-brid
 PARENT_PATH = Path(__file__).parent
 DEFAULT_IMG_PATH = PARENT_PATH / "api" / "golden-gate-bridge.jpg"
 DEFAULT_QUESTION = "What is the content of this image in a paragraph?"
-ARTIFACT_PATH = PARENT_PATH / "training" / "artifacts"
 
 # Modal
 IN_PROD = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
+SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
+
 CUDA_VERSION = "12.4.0"
 FLAVOR = "devel"
 OS = "ubuntu22.04"
 TAG = f"nvidia/cuda:{CUDA_VERSION}-{FLAVOR}-{OS}"
 PYTHON_VERSION = "3.12"
 
-DATA_VOLUME = f"{NAME}-data"
 PRETRAINED_VOLUME = f"{NAME}-pretrained"
+DB_VOLUME = f"{NAME}-db"
+DATA_VOLUME = f"{NAME}-data"
 RUNS_VOLUME = f"{NAME}-runs"
 VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
-    f"/{DATA_VOLUME}": modal.Volume.from_name(DATA_VOLUME, create_if_missing=True),
     f"/{PRETRAINED_VOLUME}": modal.Volume.from_name(PRETRAINED_VOLUME, create_if_missing=True),
+    f"/{DB_VOLUME}": modal.Volume.from_name(DB_VOLUME, create_if_missing=True),
+    f"/{DATA_VOLUME}": modal.CloudBucketMount(DATA_VOLUME, secret=SECRETS[0]),
     f"/{RUNS_VOLUME}": modal.Volume.from_name(RUNS_VOLUME, create_if_missing=True),
 }
 
 CPU = 20  # cores (Modal max)
-
 MINUTES = 60  # seconds
 
 GPU_IMAGE = (
@@ -52,7 +54,7 @@ GPU_IMAGE = (
 
 DB_NAME = "main.db"
 LOCAL_DB_URI = f"sqlite:///db/migrations/{DB_NAME}"
-REMOTE_DB_URI = f"sqlite:////{DATA_VOLUME}/{DB_NAME}"
+REMOTE_DB_URI = f"sqlite:////{DB_VOLUME}/{DB_NAME}"
 
 
 ## subprocess for Modal
