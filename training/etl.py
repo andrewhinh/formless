@@ -1,6 +1,7 @@
 import json
 import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 # import re
@@ -8,15 +9,7 @@ from xml.etree import ElementTree
 
 import modal
 
-from utils import (
-    DATA_VOLUME,
-    GPU_IMAGE,
-    IN_PROD,
-    MINUTES,
-    NAME,
-    PARENT_PATH,
-    VOLUME_CONFIG,
-)
+from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
 
 # -----------------------------------------------------------------------------
 
@@ -37,7 +30,6 @@ Here is the process for determining the quality of the handwriting:
 3. Add 1 point if the writing is clear and legible.
 """
 
-
 # -----------------------------------------------------------------------------
 
 config_keys = [
@@ -52,9 +44,8 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 
 
 # Modal
-SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
-IMAGE = GPU_IMAGE.pip_install(
-    "cairo",
+IMAGE = GPU_IMAGE.apt_install(["libcairo2-dev", "libjpeg-dev", "libgif-dev"]).pip_install(
+    "pycairo",
     "matplotlib",
     # "jiwer",
     "numpy",
@@ -62,21 +53,9 @@ IMAGE = GPU_IMAGE.pip_install(
     "openai",
     "pydantic",
     "tqdm",
-).copy_local_dir(
-    PARENT_PATH / "training" / "artifacts",
-    f"/{DATA_VOLUME}/artifacts",
+    "term-image==0.7.2",
 )
-
-
 ETL_TIMEOUT = 24 * 60 * MINUTES
-
-GPU_TYPE = "H100"
-GPU_COUNT = 2
-GPU_MEMORY = None  # options = None, 40, 80
-GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
-if GPU_TYPE.lower() == "a100":
-    GPU_CONFIG = modal.gpu.A100(memory=GPU_MEMORY, count=GPU_COUNT)
-
 APP_NAME = f"{NAME}-etl"
 app = modal.App(name=APP_NAME)
 
@@ -84,8 +63,7 @@ app = modal.App(name=APP_NAME)
 
 
 @app.function(
-    image=GPU_IMAGE,
-    gpu=GPU_CONFIG,
+    image=IMAGE,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=ETL_TIMEOUT,
@@ -101,13 +79,14 @@ def run():  # noqa: C901
     from openai import OpenAI
     from PIL import ImageFile
     from pydantic import BaseModel, Field
+    from term_image.image import from_file
     from tqdm import tqdm
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     ImageFile.LOAD_TRUNCATED_IMAGES = True
-    MATHWRITING_ROOT_DIR = f"/{DATA_VOLUME}/artifacts/mathwriting-2024"
 
-    class Ink(BaseModel):
+    @dataclass
+    class Ink:
         # Every stroke in the ink.
         # Each stroke array has shape (3, number of points), where the first
         # dimensions are (x, y, timestamp), in that order.
@@ -217,7 +196,7 @@ def run():  # noqa: C901
 
         return cairo_to_pil(surface)
 
-    class Response:
+    class Response(BaseModel):
         topic: str
         level: str
         writing_quality: int
@@ -259,9 +238,9 @@ def run():  # noqa: C901
     }
 
     for split in ["train", "valid", "test"]:
-        file_list = os.listdir(os.path.join(MATHWRITING_ROOT_DIR, split))
+        file_list = Path(f"/{DATA_VOLUME}/{split}").iterdir()
         for filename in tqdm(file_list, desc=f"Processing {split}", unit="file"):
-            ink = read_inkml_file(os.path.join(MATHWRITING_ROOT_DIR, split, filename))
+            ink = read_inkml_file(Path(f"/{DATA_VOLUME}") / split / filename)
 
             annotations = ink.annotations
             method = annotations.get("inkCreationMethod", "unknown")
@@ -287,6 +266,8 @@ def run():  # noqa: C901
             stats["split"] = stats.get("split", {})
             stats["split"][split] = stats["split"].get(split, 0) + 1
 
+            del ink, annotations, method, label_length, norm_label_length, img, width, height, response
+
     for key, value in stats.items():
         plt.figure(figsize=(10, 5))
         plt.bar(value.keys(), value.values())
@@ -295,11 +276,13 @@ def run():  # noqa: C901
         plt.ylabel("Frequency")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        plt.show()
+        plt.savefig(f"{key}_distribution.png")
+        plt.close()
+        from_file(f"{key}_distribution.png").draw()
 
-        stats_file = os.path.join(MATHWRITING_ROOT_DIR, "stats.json")
-        with open(stats_file, "w") as f:
-            json.dump(stats, f, indent=4)
+    stats_file = Path(f"/{DATA_VOLUME}") / "stats.json"
+    with stats_file.open("w") as f:
+        json.dump(stats, f, indent=4)
 
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
 

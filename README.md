@@ -152,32 +152,10 @@ Test the uploaded package:
 uv run --with formless --no-project -- formless -v
 ```
 
-### Training (WIP)
+### Training
 
-#### Torchtune
-
-Download the model:
+Run ETL:
 
 ```bash
-uv run tune download meta-llama/Llama-3.2-11B-Vision-Instruct --output-dir /tmp/Llama-3.2-11B-Vision-Instruct
-```
-
-Run the training:
-
-```bash
-uv run tune run lora_finetune_single_device --config training/llama3_2_vision-11B_lora_single_device.yaml
-```
-
-#### Custom
-
-Run ETL on HF dataset:
-
-```bash
-modal run ft/etl.py
-```
-
-Train the model:
-
-```bash
-modal run ft/train_modal.py
+modal run training/etl.py
 ```

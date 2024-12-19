@@ -5,19 +5,19 @@ from pathlib import Path
 import modal
 
 from utils import (
-    DATA_VOLUME,
+    DB_VOLUME,
     IN_PROD,
     MINUTES,
     NAME,
     PARENT_PATH,
     PYTHON_VERSION,
     REMOTE_DB_URI,
+    SECRETS,
     VOLUME_CONFIG,
 )
 
 # Modal
 FE_PATH = PARENT_PATH / "frontend"
-SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
 IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .apt_install("git")
@@ -155,7 +155,7 @@ def modal_get():  # noqa: C901
     )
 
     ## db
-    upload_dir = Path(f"/{DATA_VOLUME}/uploads")
+    upload_dir = Path(f"/{DB_VOLUME}/uploads")
     upload_dir.mkdir(exist_ok=True)
     os.chmod(upload_dir, 0o600)  # Read/write by owner only
 
@@ -1736,6 +1736,7 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
+# - move to postgres
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add user authentication:
 #   - save gens and keys to user account
