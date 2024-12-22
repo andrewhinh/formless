@@ -1,3 +1,4 @@
+import base64
 import json
 import math
 import os
@@ -13,47 +14,38 @@ from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
 
 # -----------------------------------------------------------------------------
 
-model = "gpt-4o"
-seed = 42
-temperature = 0.0
-max_tokens = 1
+MODEL = "gpt-4o"
+SEED = 42
+TEMPERATURE = 0.7
 
-prompt = """
+PROMPT = """
 You are given an image of a math expression and its corresponding annotation.
-Your task is to determine what topic the expression is about and what level of difficulty it is.
-For example, if the expression contains "a+b=c^2", you would determine the topic is "Algebra" and the level is "High School".
-You will also determine the quality of the handwriting in the image and return a score.
 
-Here is the process for determining the quality of the handwriting:
-1. Add 1 point if the writing is clear but not legible.
-2. Add 1 point if the writing is legible but not clear.
-3. Add 1 point if the writing is clear and legible.
+Determine the quality of the handwriting in the image using the additive 3-point scoring system described below. Points are accumulated based on the satisfaction of each criterion:
+1) Add 1 point if the writing is completely unreadable.
+2) Add another point if the writing is partially unreadable.
+3) Add a third point if the writing is completely clear and legible.
+
+Return the quality of the handwriting as a number between 1 and 3.
 """
 
-# -----------------------------------------------------------------------------
-
-config_keys = [
-    k
-    for k, v in globals().items()
-    if not k.startswith("_") and isinstance(v, (int, float, str, bool, dict, list, tuple, Path, type(None)))
-]
-config = {k: globals()[k] for k in config_keys}
-config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  # since Path not serializable
+SAMPLES_PER_GROUP = 10
+MINHASH_THRESHOLD = 0.8
+NUM_PERM = 128
+HASH_SZ = 16
 
 # -----------------------------------------------------------------------------
 
-
-# Modal
 IMAGE = GPU_IMAGE.apt_install(["libcairo2-dev", "libjpeg-dev", "libgif-dev"]).pip_install(
-    "pycairo",
-    "matplotlib",
-    # "jiwer",
-    "numpy",
-    "Pillow",
-    "openai",
-    "pydantic",
-    "tqdm",
-    "term-image==0.7.2",
+    "pycairo==1.27.0",
+    # "jiwer==3.0.5",
+    "numpy==2.2.1",
+    "pillow==11.0.0",
+    "openai==1.58.1",
+    "pydantic==2.10.4",
+    "tqdm==4.67.1",
+    "datasketch==1.6.5",
+    "ImageHash==4.3.1",
 )
 ETL_TIMEOUT = 24 * 60 * MINUTES
 APP_NAME = f"{NAME}-etl"
@@ -61,31 +53,21 @@ app = modal.App(name=APP_NAME)
 
 # -----------------------------------------------------------------------------
 
-
 with IMAGE.imports():
     import cairo
-    import matplotlib.pyplot as plt
 
     # import jiwer
     import numpy as np
     import PIL
     import PIL.Image
+    from datasketch import MinHash, MinHashLSH
+    from imagehash import phash
     from openai import OpenAI
-    from PIL import ImageFile
+    from PIL import Image
     from pydantic import BaseModel, Field
-    from term_image.image import from_file
     from tqdm import tqdm
 
-
-@app.function(
-    image=IMAGE,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
-)
-def run():  # noqa: C901
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    ImageFile.LOAD_TRUNCATED_IMAGES = True
 
     @dataclass
     class Ink:
@@ -199,27 +181,29 @@ def run():  # noqa: C901
         return cairo_to_pil(surface)
 
     class Response(BaseModel):
-        topic: str
-        level: str
         writing_quality: int
 
-    def openai_call(img: PIL.Image.Image):
+    def openai_call(image_path: Path):
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": PROMPT},
                 ],
             },
         ]
-        messages[1]["content"].append({"type": "image", "image": {"data": img.tobytes()}})
+        with open(image_path, "rb") as image_file:
+            base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+        messages[1]["content"].append(
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+        )
 
         return (
             client.beta.chat.completions.parse(
                 model="gpt-4o",
-                temperature=config["temperature"],
-                seed=config["seed"],
+                temperature=TEMPERATURE,
+                seed=SEED,
                 messages=messages,
                 response_format=Response,
             )
@@ -227,65 +211,92 @@ def run():  # noqa: C901
             .message.parsed
         )
 
-    stats = {
-        "inkCreationMethod": {},
-        "labelLength": {},
-        "normalizedLabelLength": {},
-        "imgWidth": {},
-        "imgHeight": {},
-        "topic": {},
-        "level": {},
-        "writingQuality": {},
-        "split": {},
+
+@app.function(
+    image=IMAGE,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def analyze_ink(filename: Path) -> dict:
+    ink = read_inkml_file(filename)
+
+    method = ink.annotations.get("inkCreationMethod", "unknown")
+    label_length = len(ink.annotations.get("label", ""))
+    norm_label_length = len(ink.annotations.get("normalizedLabel", ""))
+
+    img = render_ink(ink)
+    img_path = filename.with_suffix(".png")
+    img.save(img_path)
+    width, height = img.size
+
+    response = openai_call(img_path)
+    writing_quality = response.writing_quality
+
+    return {
+        "filename": filename,
+        "img_path": img_path,
+        "method": method,
+        "label_length": label_length,
+        "norm_label_length": norm_label_length,
+        "width": width,
+        "height": height,
+        "writing_quality": writing_quality,
     }
 
+
+@app.function(
+    image=IMAGE,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def run():
+    # collect metadata
+    metadata = {}
     for split in ["train", "valid", "test"]:
-        file_list = Path(f"/{DATA_VOLUME}/{split}").iterdir()
+        filenames = []
+        file_list = Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml")
         for filename in tqdm(file_list, desc=f"Processing {split}", unit="file"):
-            ink = read_inkml_file(Path(f"/{DATA_VOLUME}") / split / filename)
+            filenames.append(filename)
+        split_stats = list(analyze_ink.map(filenames))
+        metadata[split] = split_stats
 
-            annotations = ink.annotations
-            method = annotations.get("inkCreationMethod", "unknown")
-            stats["inkCreationMethod"][method] = stats["inkCreationMethod"].get(method, 0) + 1
-            label_length = len(annotations.get("label", ""))
-            stats["labelLength"][label_length] = stats["labelLength"].get(label_length, 0) + 1
-            norm_label_length = len(annotations.get("normalizedLabel", ""))
-            stats["normalizedLabelLength"][norm_label_length] = (
-                stats["normalizedLabelLength"].get(norm_label_length, 0) + 1
-            )
+    # filter to only get data with writing quality == 1
+    filtered = {}
+    for split, stats in metadata.items():
+        filtered[split] = []
+        for stat in stats:
+            if stat["writing_quality"] == 1:
+                filtered[split].append(stat)
 
-            img = render_ink(ink)
-            width, height = img.size
-            stats["imgWidth"][width] = stats["imgWidth"].get(width, 0) + 1
-            stats["imgHeight"][height] = stats["imgHeight"].get(height, 0) + 1
+    # stratified deduplication
+    lsh = MinHashLSH(threshold=MINHASH_THRESHOLD, num_perm=NUM_PERM)  # LSH for near-duplicates
+    dedup = {}
+    for split, stats in filtered.items():
+        dedup[split] = []
+        for stat in stats:
+            img_hash = phash(Image.open(stat["img_path"]), hash_size=HASH_SZ)
+            m = MinHash(num_perm=NUM_PERM)
+            m.update(str(img_hash).encode("utf8"))
 
-            response = openai_call(img)
-            stats["topic"][response.topic] = stats["topic"].get(response.topic, 0) + 1
-            stats["level"][response.level] = stats["level"].get(response.level, 0) + 1
-            stats["writingQuality"][response.writing_quality] = (
-                stats["writingQuality"].get(response.writing_quality, 0) + 1
-            )
-            stats["split"] = stats.get("split", {})
-            stats["split"][split] = stats["split"].get(split, 0) + 1
+            duplicates = lsh.query(m)
+            if not duplicates:
+                lsh.insert(f"{split}_{len(dedup[split])}", m)
+                dedup[split].append(stat)
+            else:
+                existing_stat = dedup[split][duplicates[0]]
+                if stat["writing_quality"] > existing_stat["writing_quality"]:
+                    dedup[split][duplicates[0]] = stat
+        dedup[split] = sorted(dedup[split], key=lambda x: x["writing_quality"], reverse=True)[:SAMPLES_PER_GROUP]
 
-            del ink, annotations, method, label_length, norm_label_length, img, width, height, response
+    # write to jsonl
+    for split in dedup.keys():
+        with open(Path(f"/{DATA_VOLUME}/{split}/metadata.jsonl"), "w") as f:
+            for item in dedup[split]:
+                f.write(json.dumps(item) + "\n")
 
-    for key, value in stats.items():
-        plt.figure(figsize=(10, 5))
-        plt.bar(value.keys(), value.values())
-        plt.title(f"{key} Distribution")
-        plt.xlabel(key)
-        plt.ylabel("Frequency")
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        plt.savefig(f"{key}_distribution.png")
-        plt.close()
-        from_file(f"{key}_distribution.png").draw()
-
-    stats_file = Path(f"/{DATA_VOLUME}") / "stats.json"
-    with stats_file.open("w") as f:
-        json.dump(stats, f, indent=4)
-
+    # TODO: use to create tokens and test model
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
 
     # def tokenize_expression(s: str) -> list[str]:
