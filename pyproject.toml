@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.14.0",
-    "ipykernel>=6.29.5",
     "modal>=0.64.178",
     "pre-commit>=4.0.1",
     "python-dotenv>=1.0.1",
