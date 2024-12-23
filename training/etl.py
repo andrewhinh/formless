@@ -18,7 +18,7 @@ MODEL = "gpt-4o"
 SEED = 42
 TEMPERATURE = 0.7
 
-PROMPT = """
+WRITING_QUALITY_PROMPT = """
 You are given an image of a math expression and its corresponding annotation.
 
 Determine the quality of the handwriting in the image using the additive 3-point scoring system described below. Points are accumulated based on the satisfaction of each criterion:
@@ -28,6 +28,13 @@ Determine the quality of the handwriting in the image using the additive 3-point
 
 Return the quality of the handwriting as a number between 1 and 3.
 """
+
+USER_QUERY_PROMPT = """
+You are a user of a handwriting OCR app, and have an image you want annotated.
+Come up with a question that you might ask to get the OCR annotation for this image.
+Be creative with your questions: sometimes include typos, vagueness, etc.
+"""
+
 
 SAMPLES_PER_GROUP = 10
 MINHASH_THRESHOLD = 0.8
@@ -183,29 +190,25 @@ with IMAGE.imports():
     class Response(BaseModel):
         writing_quality: int
 
-    def openai_call(image_path: Path):
+    def openai_call(prompt: str, img_url: str = None, response_format: BaseModel = None):
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": PROMPT},
+                    {"type": "text", "text": prompt},
                 ],
             },
         ]
-        with open(image_path, "rb") as image_file:
-            base64_img = base64.b64encode(image_file.read()).decode("utf-8")
-        messages[1]["content"].append(
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
-        )
-
+        if img_url is not None:
+            messages[1]["content"].append({"type": "image_url", "image_url": {"url": img_url}})
         return (
             client.beta.chat.completions.parse(
                 model="gpt-4o",
                 temperature=TEMPERATURE,
                 seed=SEED,
                 messages=messages,
-                response_format=Response,
+                **({"response_format": response_format} if response_format is not None else {}),
             )
             .choices[0]
             .message.parsed
@@ -220,29 +223,16 @@ with IMAGE.imports():
 )
 def analyze_ink(filename: Path) -> dict:
     ink = read_inkml_file(filename)
-
-    method = ink.annotations.get("inkCreationMethod", "unknown")
-    label_length = len(ink.annotations.get("label", ""))
-    norm_label_length = len(ink.annotations.get("normalizedLabel", ""))
-
-    img = render_ink(ink)
     img_path = filename.with_suffix(".png")
-    img.save(img_path)
-    width, height = img.size
-
-    response = openai_call(img_path)
+    render_ink(ink).save(img_path)
+    with open(img_path, "rb") as image_file:
+        base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+        img_url = f"data:image/jpeg;base64,{base64_img}"
+    response = openai_call(WRITING_QUALITY_PROMPT, img_url, Response)
     writing_quality = response.writing_quality
-
-    return {
-        "filename": filename,
-        "img_path": img_path,
-        "method": method,
-        "label_length": label_length,
-        "norm_label_length": norm_label_length,
-        "width": width,
-        "height": height,
-        "writing_quality": writing_quality,
-    }
+    user_query = openai_call(USER_QUERY_PROMPT, img_url)
+    label = ink.annotations["label"]
+    return {"img_url": img_url, "writing_quality": writing_quality, "user_query": user_query, "label": label}
 
 
 @app.function(
@@ -276,7 +266,7 @@ def run():
     for split, stats in filtered.items():
         dedup[split] = []
         for stat in stats:
-            img_hash = phash(Image.open(stat["img_path"]), hash_size=HASH_SZ)
+            img_hash = phash(Image.open(stat["img_url"]), hash_size=HASH_SZ)
             m = MinHash(num_perm=NUM_PERM)
             m.update(str(img_hash).encode("utf8"))
 
@@ -291,10 +281,23 @@ def run():
         dedup[split] = sorted(dedup[split], key=lambda x: x["writing_quality"], reverse=True)[:SAMPLES_PER_GROUP]
 
     # write to jsonl
+    id = 0
     for split in dedup.keys():
-        with open(Path(f"/{DATA_VOLUME}/{split}/metadata.jsonl"), "w") as f:
+        with open(Path(f"/{DATA_VOLUME}/{split}/data.jsonl"), "w") as f:
             for item in dedup[split]:
+                item["id"] = id
+                item["conversations"] = [
+                    {
+                        "from": "user",
+                        "value": f"Picture 1: <img>{item['img_url']}</img>\n{item['user_query']}",
+                    },
+                    {
+                        "from": "assistant",
+                        "value": item["label"],
+                    },
+                ]
                 f.write(json.dumps(item) + "\n")
+                id += 1
 
     # TODO: use to create tokens and test model
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
