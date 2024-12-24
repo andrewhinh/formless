@@ -41,7 +41,7 @@ GPU_IMAGE = (
     )
     .apt_install("git")  # add system dependencies
     .pip_install(  # add Python dependencies
-        "hf_transfer==0.1.6",
+        "hf_transfer==0.1.8",
     )
     .env(
         {
