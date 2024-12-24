@@ -14,7 +14,8 @@ from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
 
 # -----------------------------------------------------------------------------
 
-MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"
+QUANTIZATION = "awq"
 ENFORCE_EAGER = True
 MAX_NUM_SEQS = 1
 
@@ -86,7 +87,7 @@ IMAGE = (
 )
 ETL_TIMEOUT = 24 * 60 * MINUTES
 
-GPU_TYPE = "H100"
+GPU_TYPE = "t4"
 GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
@@ -239,6 +240,7 @@ def analyze_ink(filename: Path) -> dict:  # noqa: C901
         enforce_eager=ENFORCE_EAGER,
         max_num_seqs=MAX_NUM_SEQS,
         tensor_parallel_size=GPU_COUNT,
+        **({"quantization": QUANTIZATION} if QUANTIZATION is not None else {}),
     )
 
     stop_token_ids = None
