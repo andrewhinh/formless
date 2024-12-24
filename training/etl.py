@@ -14,10 +14,12 @@ from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
 
 # -----------------------------------------------------------------------------
 
-MODEL = "gpt-4o"
-SEED = 42
-TEMPERATURE = 0.7
+MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+ENFORCE_EAGER = True
+MAX_NUM_SEQS = 1
 
+WRITE_TEMPERATURE = 0.2
+WRITE_MAX_TOKENS = 5
 WRITING_QUALITY_PROMPT = """
 You are given an image of a math expression and its corresponding annotation.
 
@@ -29,12 +31,15 @@ Determine the quality of the handwriting in the image using the additive 3-point
 Return the quality of the handwriting as a number between 1 and 3.
 """
 
+QUERY_TEMPERATURE = 1.0
+QUERY_MAX_TOKENS = 5
 USER_QUERY_PROMPT = """
 You are a user of a handwriting OCR app, and have an image you want annotated.
 Come up with a question that you might ask to get the OCR annotation for this image.
-Be creative with your questions: sometimes include typos, vagueness, etc.
+To make this more interesting, flip a coin.
+If heads, simply ask what the image contains.
+If tails, be creative with the question above: include typos, vagueness, etc.
 """
-
 
 SAMPLES_PER_GROUP = 10
 MINHASH_THRESHOLD = 0.8
@@ -43,18 +48,51 @@ HASH_SZ = 16
 
 # -----------------------------------------------------------------------------
 
-IMAGE = GPU_IMAGE.apt_install(["libcairo2-dev", "libjpeg-dev", "libgif-dev"]).pip_install(
-    "pycairo==1.27.0",
-    # "jiwer==3.0.5",
-    "numpy==2.2.1",
-    "pillow==11.0.0",
-    "openai==1.58.1",
-    "pydantic==2.10.4",
-    "tqdm==4.67.1",
-    "datasketch==1.6.5",
-    "ImageHash==4.3.1",
+
+# container build-time fns
+def download_model():
+    from huggingface_hub import login, snapshot_download
+
+    login(token=os.getenv("HF_TOKEN"), new_session=False)
+    snapshot_download(
+        MODEL,
+        ignore_patterns=["*.pt", "*.bin"],
+    )
+
+
+IMAGE = (
+    GPU_IMAGE.apt_install(["libcairo2-dev", "libjpeg-dev", "libgif-dev"])
+    .pip_install(
+        "vllm==0.6.5",
+        "ninja==1.11.1",  # required to build flash-attn
+        "packaging==23.1",  # required to build flash-attn
+        "wheel==0.41.2",  # required to build flash-attn
+        "torch==2.5.1",  # required to build flash-attn
+        "pycairo==1.27.0",
+        # "jiwer==3.0.5",
+        "pydantic==2.10.4",
+        "tqdm==4.67.1",
+        "datasketch==1.6.5",
+        "ImageHash==4.3.1",
+    )
+    .run_commands(  # add flash-attn
+        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
+    )
+    .run_function(
+        download_model,
+        secrets=SECRETS,
+        volumes=VOLUME_CONFIG,
+    )
 )
 ETL_TIMEOUT = 24 * 60 * MINUTES
+
+GPU_TYPE = "H100"
+GPU_COUNT = 1
+GPU_SIZE = None  # options = None, "40GB", "80GB"
+GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
+if GPU_TYPE.lower() == "a100":
+    GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
+
 APP_NAME = f"{NAME}-etl"
 app = modal.App(name=APP_NAME)
 
@@ -69,13 +107,22 @@ with IMAGE.imports():
     import PIL.Image
     from datasketch import MinHash, MinHashLSH
     from imagehash import phash
-    from openai import OpenAI
     from PIL import Image
-    from pydantic import BaseModel, Field
+    from pydantic import Field
     from tqdm import tqdm
+    from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+@app.function(
+    image=IMAGE,
+    gpu=GPU_CONFIG,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def analyze_ink(filename: Path) -> dict:  # noqa: C901
+    # setup
     @dataclass
     class Ink:
         # Every stroke in the ink.
@@ -187,10 +234,27 @@ with IMAGE.imports():
 
         return cairo_to_pil(surface)
 
-    class Response(BaseModel):
-        writing_quality: int
+    llm = LLM(
+        model=MODEL,
+        enforce_eager=ENFORCE_EAGER,
+        max_num_seqs=MAX_NUM_SEQS,
+        tensor_parallel_size=GPU_COUNT,
+    )
 
-    def openai_call(prompt: str, img_url: str = None, response_format: BaseModel = None):
+    stop_token_ids = None
+    write_samp_params = SamplingParams(
+        temperature=WRITE_TEMPERATURE,
+        max_tokens=WRITE_MAX_TOKENS,
+        stop_token_ids=stop_token_ids,
+        guided_decoding=GuidedDecodingParams(choice=[1, 2, 3]),
+    )
+    query_samp_params = SamplingParams(
+        temperature=QUERY_TEMPERATURE,
+        max_tokens=QUERY_MAX_TOKENS,
+        stop_token_ids=stop_token_ids,
+    )
+
+    def model_call(prompt: str, samp_params: SamplingParams, img_url: str = None):
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -202,35 +266,22 @@ with IMAGE.imports():
         ]
         if img_url is not None:
             messages[1]["content"].append({"type": "image_url", "image_url": {"url": img_url}})
-        return (
-            client.beta.chat.completions.parse(
-                model="gpt-4o",
-                temperature=TEMPERATURE,
-                seed=SEED,
-                messages=messages,
-                **({"response_format": response_format} if response_format is not None else {}),
-            )
-            .choices[0]
-            .message.parsed
-        )
+        outputs = llm.chat(messages, samp_params)
+        generated_text = outputs[0].outputs[0].text.strip()
+        return generated_text
 
-
-@app.function(
-    image=IMAGE,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
-)
-def analyze_ink(filename: Path) -> dict:
+    # run
     ink = read_inkml_file(filename)
     img_path = filename.with_suffix(".png")
-    render_ink(ink).save(img_path)
+    img = render_ink(ink)
+    if os.path.exists(img_path):
+        os.remove(img_path)
+    img.save(img_path)
     with open(img_path, "rb") as image_file:
         base64_img = base64.b64encode(image_file.read()).decode("utf-8")
         img_url = f"data:image/jpeg;base64,{base64_img}"
-    response = openai_call(WRITING_QUALITY_PROMPT, img_url, Response)
-    writing_quality = response.writing_quality
-    user_query = openai_call(USER_QUERY_PROMPT, img_url)
+    writing_quality = int(model_call(WRITING_QUALITY_PROMPT, write_samp_params, img_url))
+    user_query = model_call(USER_QUERY_PROMPT, query_samp_params, img_url)
     label = ink.annotations["label"]
     return {"img_url": img_url, "writing_quality": writing_quality, "user_query": user_query, "label": label}
 
