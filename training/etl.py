@@ -1,7 +1,10 @@
+"""ETL for randomly selected train samples to FT Qwen2-VL-7B-Instruct."""
+
 import base64
 import json
 import math
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +19,7 @@ from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
 
 MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"
 QUANTIZATION = "awq"
+KV_CACHE_DTYPE = "fp8_e5m2"
 ENFORCE_EAGER = True
 MAX_NUM_SEQS = 1
 
@@ -25,7 +29,7 @@ WRITING_QUALITY_PROMPT = """
 You are given an image of a math expression and its corresponding annotation.
 
 Determine the quality of the handwriting in the image using the additive 3-point scoring system described below. Points are accumulated based on the satisfaction of each criterion:
-1) Add 1 point if the writing is completely unreadable.
+1) Add 1 point if the writing is very difficult to read.
 2) Add another point if the writing is partially unreadable.
 3) Add a third point if the writing is completely clear and legible.
 
@@ -33,16 +37,15 @@ Return the quality of the handwriting as a number between 1 and 3.
 """
 
 QUERY_TEMPERATURE = 1.0
-QUERY_MAX_TOKENS = 5
+QUERY_MAX_TOKENS = 1024
 USER_QUERY_PROMPT = """
 You are a user of a handwriting OCR app, and have an image you want annotated.
-Come up with a question that you might ask to get the OCR annotation for this image.
-To make this more interesting, flip a coin.
-If heads, simply ask what the image contains.
-If tails, be creative with the question above: include typos, vagueness, etc.
+Come up with a variation of the question: What does this image show?
+Be creative! Vary in length, spelling, and punctuation.
 """
 
-SAMPLES_PER_GROUP = 10
+SPLITS = ["train"]
+N_SAMPLES = 500
 MINHASH_THRESHOLD = 0.8
 NUM_PERM = 128
 HASH_SZ = 16
@@ -87,7 +90,7 @@ IMAGE = (
 )
 ETL_TIMEOUT = 24 * 60 * MINUTES
 
-GPU_TYPE = "t4"
+GPU_TYPE = "l4"
 GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
@@ -104,8 +107,6 @@ with IMAGE.imports():
 
     # import jiwer
     import numpy as np
-    import PIL
-    import PIL.Image
     from datasketch import MinHash, MinHashLSH
     from imagehash import phash
     from PIL import Image
@@ -114,16 +115,6 @@ with IMAGE.imports():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
 
-
-@app.function(
-    image=IMAGE,
-    gpu=GPU_CONFIG,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
-)
-def analyze_ink(filename: Path) -> dict:  # noqa: C901
-    # setup
     @dataclass
     class Ink:
         # Every stroke in the ink.
@@ -164,12 +155,12 @@ def analyze_ink(filename: Path) -> dict:  # noqa: C901
 
         return Ink(strokes=strokes, annotations=annotations)
 
-    def cairo_to_pil(surface: cairo.ImageSurface) -> PIL.Image.Image:
+    def cairo_to_pil(surface: cairo.ImageSurface) -> Image:
         """Converts a ARGB Cairo surface into an RGB PIL image."""
         size = (surface.get_width(), surface.get_height())
         stride = surface.get_stride()
         with surface.get_data() as memory:
-            return PIL.Image.frombuffer("RGB", size, memory.tobytes(), "raw", "BGRX", stride)
+            return Image.frombuffer("RGB", size, memory.tobytes(), "raw", "BGRX", stride)
 
     def render_ink(
         ink: Ink,
@@ -178,7 +169,7 @@ def analyze_ink(filename: Path) -> dict:  # noqa: C901
         stroke_width: float = 1.5,
         stroke_color: tuple[float, float, float] = (0.0, 0.0, 0.0),
         background_color: tuple[float, float, float] = (1.0, 1.0, 1.0),
-    ):
+    ) -> Image:
         """Renders an ink as a PIL image using Cairo.
 
         The image size is chosen to fit the entire ink while having one pixel per
@@ -235,12 +226,26 @@ def analyze_ink(filename: Path) -> dict:  # noqa: C901
 
         return cairo_to_pil(surface)
 
+    def img_path_to_b64(img_path: Path) -> str:
+        with open(img_path, "rb") as image_file:
+            base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+        return f"data:image/jpeg;base64,{base64_img}"
+
+
+@app.function(
+    image=IMAGE,
+    gpu=GPU_CONFIG,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def analyze_ink(filename: Path) -> dict:
     llm = LLM(
         model=MODEL,
         enforce_eager=ENFORCE_EAGER,
         max_num_seqs=MAX_NUM_SEQS,
         tensor_parallel_size=GPU_COUNT,
-        **({"quantization": QUANTIZATION} if QUANTIZATION is not None else {}),
+        **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
     )
 
     stop_token_ids = None
@@ -272,20 +277,17 @@ def analyze_ink(filename: Path) -> dict:  # noqa: C901
         generated_text = outputs[0].outputs[0].text.strip()
         return generated_text
 
-    # run
     ink = read_inkml_file(filename)
     img_path = filename.with_suffix(".png")
     img = render_ink(ink)
     if os.path.exists(img_path):
         os.remove(img_path)
     img.save(img_path)
-    with open(img_path, "rb") as image_file:
-        base64_img = base64.b64encode(image_file.read()).decode("utf-8")
-        img_url = f"data:image/jpeg;base64,{base64_img}"
+    img_url = img_path_to_b64(img_path)
     writing_quality = int(model_call(WRITING_QUALITY_PROMPT, write_samp_params, img_url))
     user_query = model_call(USER_QUERY_PROMPT, query_samp_params, img_url)
     label = ink.annotations["label"]
-    return {"img_url": img_url, "writing_quality": writing_quality, "user_query": user_query, "label": label}
+    return {"img_path": img_path, "writing_quality": writing_quality, "user_query": user_query, "label": label}
 
 
 @app.function(
@@ -297,13 +299,16 @@ def analyze_ink(filename: Path) -> dict:  # noqa: C901
 def run():
     # collect metadata
     metadata = {}
-    for split in ["train", "valid", "test"]:
+    for split in SPLITS:
         filenames = []
-        file_list = Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml")
+        file_list = list(Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml"))
+        random.shuffle(file_list)
+        file_list = file_list[:N_SAMPLES]
         for filename in tqdm(file_list, desc=f"Processing {split}", unit="file"):
             filenames.append(filename)
         split_stats = list(analyze_ink.map(filenames))
         metadata[split] = split_stats
+        print(f"Collected {len(metadata[split])} samples for split {split}")
 
     # filter to only get data with writing quality == 1
     filtered = {}
@@ -312,14 +317,15 @@ def run():
         for stat in stats:
             if stat["writing_quality"] == 1:
                 filtered[split].append(stat)
+        print(f"Found {len(filtered[split])} samples with writing quality == 1 for split {split}")
 
-    # stratified deduplication
+    # deduplication
     lsh = MinHashLSH(threshold=MINHASH_THRESHOLD, num_perm=NUM_PERM)  # LSH for near-duplicates
     dedup = {}
     for split, stats in filtered.items():
         dedup[split] = []
         for stat in stats:
-            img_hash = phash(Image.open(stat["img_url"]), hash_size=HASH_SZ)
+            img_hash = phash(Image.open(stat["img_path"]), hash_size=HASH_SZ)
             m = MinHash(num_perm=NUM_PERM)
             m.update(str(img_hash).encode("utf8"))
 
@@ -331,7 +337,8 @@ def run():
                 existing_stat = dedup[split][duplicates[0]]
                 if stat["writing_quality"] > existing_stat["writing_quality"]:
                     dedup[split][duplicates[0]] = stat
-        dedup[split] = sorted(dedup[split], key=lambda x: x["writing_quality"], reverse=True)[:SAMPLES_PER_GROUP]
+        dedup[split] = sorted(dedup[split], key=lambda x: x["writing_quality"], reverse=True)
+        print(f"Found {len(dedup[split])} unique samples for split {split}")
 
     # write to jsonl
     id = 0
@@ -342,77 +349,16 @@ def run():
                 item["conversations"] = [
                     {
                         "from": "user",
-                        "value": f"Picture 1: <img>{item['img_url']}</img>\n{item['user_query']}",
+                        "value": f"Picture 1: <img>{img_path_to_b64(item['img_path'])}</img>\n{item['user_query']}",
                     },
                     {
                         "from": "assistant",
                         "value": item["label"],
                     },
                 ]
+                item["img_path"] = str(item["img_path"])  # to make json serializable
                 f.write(json.dumps(item) + "\n")
                 id += 1
-
-    # TODO: use to create tokens and test model
-    # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
-
-    # def tokenize_expression(s: str) -> list[str]:
-    #     r"""Transform a Latex math string into a list of tokens.
-
-    #     Tokens are strings that are meaningful in the context of Latex
-    #     e.g. '1', r'\alpha', r'\frac'.
-
-    #     Args:
-    #       s: unicode input string (ex: r"\frac{1}{2}")
-
-    #     Returns
-    #     -------
-    #       tokens: list of tokens as unicode strings.
-    #     """
-    #     tokens = []
-    #     while s:
-    #         if s[0] == "\\":
-    #             tokens.append(_COMMAND_RE.match(s).group(0))
-    #         else:
-    #             tokens.append(s[0])
-
-    #         s = s[len(tokens[-1]) :]
-
-    #     return tokens
-
-    # # Example
-    # print(tokenize_expression(r"\frac{\alpha}{2}\begin{matrix}1&0\\0&1\end{matrix}\not\in\mathbb{R}"))
-    # ### CER Computation
-
-    # def compute_cer(truth_and_output: list[tuple[str, str]]):
-    #     """Computes CER given pairs of ground truth and model output."""
-
-    #     class TokenizeTransform(jiwer.transforms.AbstractTransform):
-    #         def process_string(self, s: str):
-    #             return tokenize_expression(r"{}".format(s))
-
-    #         def process_list(self, tokens: list[str]):
-    #             return [self.process_string(token) for token in tokens]
-
-    #     ground_truth, model_output = zip(*truth_and_output, strict=False)
-
-    #     return jiwer.cer(
-    #         truth=list(ground_truth),
-    #         hypothesis=list(model_output),
-    #         reference_transform=TokenizeTransform(),
-    #         hypothesis_transform=TokenizeTransform(),
-    #     )
-
-    # # Test data to run compute_cer().
-    # # The first element is the model prediction, the second the ground truth.
-    # examples = [
-    #     (r"\sqrt{2}", r"\sqrt{2}"),  # 0 mistakes, 4 tokens
-    #     (r"\frac{1}{2}", r"\frac{i}{2}"),  # 1 mistake, 7 tokens
-    #     (r"\alpha^{2}", "a^{2}"),  # 1 mistake, 5 tokens
-    #     ("abc", "def"),  # 3 mistakes, 3 tokens
-    # ]
-
-    # # 5 mistakes for 19 tokens: 26.3% error rate.
-    # print(f"{compute_cer(examples)*100:.1f} %")
 
 
 @app.local_entrypoint()

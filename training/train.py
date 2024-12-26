@@ -1,3 +1,5 @@
+"""Running official Qwen-VL training script on Modal."""
+
 import modal
 
 from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG, _exec_subprocess
