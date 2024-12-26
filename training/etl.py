@@ -342,23 +342,26 @@ def run():
 
     # write to jsonl
     id = 0
+    items = []
     for split in dedup.keys():
-        with open(Path(f"/{DATA_VOLUME}/{split}/data.jsonl"), "w") as f:
-            for item in dedup[split]:
-                item["id"] = id
-                item["conversations"] = [
-                    {
-                        "from": "user",
-                        "value": f"Picture 1: <img>{img_path_to_b64(item['img_path'])}</img>\n{item['user_query']}",
-                    },
-                    {
-                        "from": "assistant",
-                        "value": item["label"],
-                    },
-                ]
-                item["img_path"] = str(item["img_path"])  # to make json serializable
-                f.write(json.dumps(item) + "\n")
-                id += 1
+        for item in dedup[split]:
+            item["id"] = id
+            item["conversations"] = [
+                {
+                    "from": "user",
+                    "value": f"Picture 1: <img>{img_path_to_b64(item['img_path'])}</img>\n{item['user_query']}",
+                },
+                {
+                    "from": "assistant",
+                    "value": item["label"],
+                },
+            ]
+            item["img_path"] = str(item["img_path"])  # to make json serializable
+            items.append(item)
+            id += 1
+
+    with open(Path(f"/{DATA_VOLUME}/{split}/data.json"), "w") as f:
+        json.dump(items, f, indent=4)
 
 
 @app.local_entrypoint()
