@@ -1,26 +1,43 @@
 """Running official Qwen-VL training script on Modal."""
 
+import os
+
 import modal
 
-from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG, _exec_subprocess
+from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
 
 # -----------------------------------------------------------------------------
 
 IMAGE = (
     GPU_IMAGE.apt_install("git")
     .run_commands(["git clone https://github.com/QwenLM/Qwen-VL.git"])
+    .copy_local_file("training/finetune.py", "/Qwen-VL/finetune.py")
+    .copy_local_file("training/finetune_ds.sh", "/Qwen-VL/finetune/finetune_ds.sh")
+    .copy_local_file("training/ds_config_zero3.json", "/Qwen-VL/finetune/ds_config_zero3.json")
     .pip_install(
-        "pillow==11.0.0",
-        "tqdm==4.67.1",
-        "deepspeed==0.16.2",
-    )
-    .env(
-        {
-            "DATA": f"/{DATA_VOLUME}/train/",
-        }
+        "transformers",
+        "accelerate",
+        "tiktoken",
+        "einops",
+        "transformers_stream_generator==0.0.4",
+        "scipy",
+        "torchvision",
+        "pillow",
+        "tensorboard",
+        "matplotlib",
+        "deepspeed",
+        "peft",
     )
 )
 TRAIN_TIMEOUT = 24 * 60 * MINUTES
+
+GPU_TYPE = "H100"
+GPU_COUNT = 2
+GPU_SIZE = None  # options = None, "40GB", "80GB"
+GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
+if GPU_TYPE.lower() == "a100":
+    GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
+
 APP_NAME = f"{NAME}-train"
 app = modal.App(name=APP_NAME)
 
@@ -32,12 +49,22 @@ with IMAGE.imports():
 
 @app.function(
     image=IMAGE,
+    gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TRAIN_TIMEOUT,
 )
 def run():
-    _exec_subprocess(["sh", "/Qwen-VL/finetune/finetune_ds.sh"])
+    os.chdir("/Qwen-VL")
+    _exec_subprocess(
+        [
+            "sh",
+            "finetune/finetune_ds.sh",
+            str(GPU_COUNT),
+            f"/{DATA_VOLUME}/train/data.json",
+            f"/{RUNS_VOLUME}/qwen2-vl",
+        ]
+    )
 
     # TODO: use to create tokens and test model
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")

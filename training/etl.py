@@ -1,4 +1,4 @@
-"""ETL for randomly selected train samples to FT Qwen2-VL-7B-Instruct."""
+"""ETL for randomly selected train samples to FT Qwen2-VL."""
 
 import base64
 import json
@@ -226,11 +226,6 @@ with IMAGE.imports():
 
         return cairo_to_pil(surface)
 
-    def img_path_to_b64(img_path: Path) -> str:
-        with open(img_path, "rb") as image_file:
-            base64_img = base64.b64encode(image_file.read()).decode("utf-8")
-        return f"data:image/jpeg;base64,{base64_img}"
-
 
 @app.function(
     image=IMAGE,
@@ -283,7 +278,9 @@ def analyze_ink(filename: Path) -> dict:
     if os.path.exists(img_path):
         os.remove(img_path)
     img.save(img_path)
-    img_url = img_path_to_b64(img_path)
+    with open(img_path, "rb") as image_file:
+        base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+    img_url = f"data:image/jpeg;base64,{base64_img}"
     writing_quality = int(model_call(WRITING_QUALITY_PROMPT, write_samp_params, img_url))
     user_query = model_call(USER_QUERY_PROMPT, query_samp_params, img_url)
     label = ink.annotations["label"]
@@ -345,19 +342,20 @@ def run():
     items = []
     for split in dedup.keys():
         for item in dedup[split]:
-            item["id"] = id
-            item["conversations"] = [
-                {
-                    "from": "user",
-                    "value": f"Picture 1: <img>{img_path_to_b64(item['img_path'])}</img>\n{item['user_query']}",
-                },
-                {
-                    "from": "assistant",
-                    "value": item["label"],
-                },
-            ]
-            item["img_path"] = str(item["img_path"])  # to make json serializable
-            items.append(item)
+            format_item = {
+                "id": id,
+                "conversations": [
+                    {
+                        "from": "user",
+                        "value": f"Picture 1: <img>{str(item['img_path'])}</img>\n{item['user_query']}",
+                    },
+                    {
+                        "from": "assistant",
+                        "value": item["label"],
+                    },
+                ],
+            }
+            items.append(format_item)
             id += 1
 
     with open(Path(f"/{DATA_VOLUME}/{split}/data.json"), "w") as f:
