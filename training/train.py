@@ -32,7 +32,7 @@ IMAGE = (
 TRAIN_TIMEOUT = 24 * 60 * MINUTES
 
 GPU_TYPE = "H100"
-GPU_COUNT = 2
+GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":

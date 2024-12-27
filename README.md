@@ -19,7 +19,6 @@ uv run formless -i <image-url> [-v]
 Soon:
 
 - Python bindings.
-- Frontend.
 
 ## Development
 

@@ -13,7 +13,9 @@ from utils import (
     MINUTES,
     NAME,
     PARENT_PATH,
+    PRETRAINED_VOLUME,
     REMOTE_DB_URI,
+    RUNS_VOLUME,
     SECRETS,
     VOLUME_CONFIG,
     Colors,
@@ -21,47 +23,35 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
-gpu_memory_utilization = 0.90
-max_model_len = 8192
-max_num_seqs = 1
-enforce_eager = True
+MODEL = f"/{RUNS_VOLUME}/qwen2-vl/checkpoint-20"  # pretrained model or ckpt
+TOKENIZER = f"/{PRETRAINED_VOLUME}/models--Qwen--Qwen-VL-Chat/snapshots/f57cfbd358cb56b710d963669ad1bcfb44cdcdd8"
+GPU_MEMORY_UTILIZATION = 0.90
+MAX_MODEL_LEN = 2048
+MAX_NUM_SEQS = 1
+ENFORCE_EAGER = True
 
-temperature = 0.2
-max_tokens = 1024
-
-# -----------------------------------------------------------------------------
-
-config_keys = [
-    k
-    for k, v in globals().items()
-    if not k.startswith("_") and isinstance(v, (int, float, str, bool, dict, list, tuple, Path, type(None)))
-]
-config = {k: globals()[k] for k in config_keys}
-config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  # since Path not serializable
+TEMPERATURE = 0.2
+MAX_TOKENS = 1024
 
 # -----------------------------------------------------------------------------
 
 
 # container build-time fns
 def download_model():
-    from huggingface_hub import login, snapshot_download
+    if not os.path.exists(MODEL):
+        from huggingface_hub import login, snapshot_download
 
-    login(token=os.getenv("HF_TOKEN"), new_session=False)
-    snapshot_download(
-        config["model"],
-        ignore_patterns=["*.pt", "*.bin"],
-    )
+        login(token=os.getenv("HF_TOKEN"), new_session=False)
+        snapshot_download(
+            MODEL,
+            ignore_patterns=["*.pt", "*.bin"],
+        )
 
 
 # Modal
 IMAGE = (
     GPU_IMAGE.pip_install(  # add Python dependencies
-        "vllm==0.6.2",
-        "term-image==0.7.2",
-        "fastapi==0.115.6",
-        "validators==0.34.0",
-        "sqlmodel==0.0.22",
+        "vllm==0.6.2", "term-image==0.7.2", "fastapi==0.115.6", "validators==0.34.0", "sqlmodel==0.0.22", "matplotlib"
     )
     .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
     .run_function(
@@ -75,8 +65,8 @@ API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
 API_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
-GPU_TYPE = "H100"
-GPU_COUNT = 2
+GPU_TYPE = "l4"
+GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
@@ -138,12 +128,14 @@ def modal_get():  # noqa: C901
             yield session
 
     llm = LLM(
-        model=config["model"],
-        gpu_memory_utilization=config["gpu_memory_utilization"],
-        max_model_len=config["max_model_len"],
-        max_num_seqs=config["max_num_seqs"],
-        enforce_eager=config["enforce_eager"],
+        model=MODEL,
+        tokenizer=TOKENIZER,
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
+        max_model_len=MAX_MODEL_LEN,
+        max_num_seqs=MAX_NUM_SEQS,
+        enforce_eager=ENFORCE_EAGER,
         tensor_parallel_size=GPU_COUNT,
+        trust_remote_code=True,
     )
 
     ## helpers
@@ -190,8 +182,8 @@ def modal_get():  # noqa: C901
         prompt = f"<|image|><|begin_of_text|>{question}"
         stop_token_ids = None
         sampling_params = SamplingParams(
-            temperature=config["temperature"],
-            max_tokens=config["max_tokens"],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
             stop_token_ids=stop_token_ids,
         )
         inputs = {
@@ -299,8 +291,8 @@ def modal_get():  # noqa: C901
         prompt = f"<|image|><|begin_of_text|>{question}"
         stop_token_ids = None
         sampling_params = SamplingParams(
-            temperature=config["temperature"],
-            max_tokens=config["max_tokens"],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
             stop_token_ids=stop_token_ids,
         )
         inputs = {
