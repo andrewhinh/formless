@@ -62,7 +62,7 @@ uv run pre-commit run --all-files
 Pull latest db and migrate (do before running the frontend/api):
 
 ```bash
-make migrate <env>
+make migrate env=<env> message=<message>
 ```
 
 ### Repository Structure
