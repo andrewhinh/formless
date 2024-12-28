@@ -107,7 +107,7 @@ with IMAGE.imports():
 
     import requests
     import validators
-    from fastapi import FastAPI, Form, HTTPException, Security, UploadFile
+    from fastapi import FastAPI, HTTPException, Security, UploadFile
     from fastapi.security import APIKeyHeader
     from PIL import Image, ImageFile
     from pydantic import BaseModel
@@ -183,7 +183,6 @@ def modal_get():  # noqa: C901
 
     class UrlInput(BaseModel):
         image_url: str
-        question: str = DEFAULT_QUESTION
 
     ## main
 
@@ -194,7 +193,6 @@ def modal_get():  # noqa: C901
         print(f"Generating response to request {request_id}")
 
         image_url = input_data.image_url
-        question = input_data.question
 
         ## validate
         if not image_url or not validators.url(image_url):
@@ -214,7 +212,7 @@ def modal_get():  # noqa: C901
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": question},
+                    {"type": "text", "text": DEFAULT_QUESTION},
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             },
@@ -247,9 +245,7 @@ def modal_get():  # noqa: C901
         return generated_text
 
     @f_app.post("/upload")
-    async def main_upload(
-        image: UploadFile, question: str = Form(...), api_key: bool = Security(verify_api_key)
-    ) -> str:
+    async def main_upload(image: UploadFile, api_key: bool = Security(verify_api_key)) -> str:
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
@@ -322,7 +318,7 @@ def modal_get():  # noqa: C901
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": question},
+                    {"type": "text", "text": DEFAULT_QUESTION},
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             },
@@ -370,7 +366,7 @@ def main():
 
     response = requests.post(
         f"{modal_get.web_url}/",
-        json={"image_url": DEFAULT_IMG_URL, "question": DEFAULT_QUESTION},
+        json={"image_url": DEFAULT_IMG_URL},
         headers={"X-API-Key": api_key},
     )
     assert response.ok, response.status_code
@@ -378,7 +374,6 @@ def main():
     response = requests.post(
         f"{modal_get.web_url}/upload",
         files={"image": open(DEFAULT_IMG_PATH, "rb")},
-        data={"question": DEFAULT_QUESTION},
         headers={"X-API-Key": api_key},
     )
     assert response.ok, response.status_code

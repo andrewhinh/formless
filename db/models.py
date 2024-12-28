@@ -10,7 +10,6 @@ class GenBase(SQLModel):
     request_at: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
     image_url: str | None = None
     image_file: str | None = None
-    question: str | None = None
     failed: bool | None = False
     response: str | None = None
     session_id: str = Field(default=None, index=True)

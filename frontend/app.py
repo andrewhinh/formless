@@ -295,16 +295,6 @@ def modal_get():  # noqa: C901
                 fh.Div(
                     fh.Div(
                         fh.P(
-                            g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
-                            onclick=f"navigator.clipboard.writeText('{g.question}');",
-                            hx_post="/toast?message=Copied to clipboard!&type=success",
-                            hx_indicator="#spinner",
-                            hx_target="#toast-container",
-                            hx_swap="outerHTML",
-                            cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
-                            title="Click to copy",
-                        ),
-                        fh.P(
                             "Generation failed",
                             cls="text-red-300",
                             hx_ext="sse",
@@ -357,23 +347,13 @@ def modal_get():  # noqa: C901
                 fh.Div(
                     fh.Div(
                         fh.P(
-                            g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
-                            onclick=f"navigator.clipboard.writeText('{g.question}');",
-                            hx_post="/toast?message=Copied to clipboard!&type=success",
-                            hx_indicator="#spinner",
-                            hx_target="#toast-container",
-                            hx_swap="outerHTML",
-                            cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
-                            title="Click to copy",
-                        ),
-                        fh.P(
                             g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
                             onclick=f"navigator.clipboard.writeText('{g.response}');",
                             hx_post="/toast?message=Copied to clipboard!&type=success",
                             hx_indicator="#spinner",
                             hx_target="#toast-container",
                             hx_swap="outerHTML",
-                            cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                            cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
                             title="Click to copy",
                             hx_ext="sse",
                             sse_connect=f"/stream-gens/{g.id}",
@@ -423,16 +403,6 @@ def modal_get():  # noqa: C901
             ),
             fh.Div(
                 fh.Div(
-                    fh.P(
-                        g.question[:limit_chars] + ("..." if len(g.question) > limit_chars else ""),
-                        onclick=f"navigator.clipboard.writeText('{g.question}');",
-                        hx_post="/toast?message=Copied to clipboard!&type=success",
-                        hx_indicator="#spinner",
-                        hx_target="#toast-container",
-                        hx_swap="outerHTML",
-                        cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
-                        title="Click to copy",
-                    ),
                     fh.P(
                         "Scanning image ...",
                         hx_ext="sse",
@@ -999,14 +969,13 @@ def modal_get():  # noqa: C901
         if g.image_url:
             response = requests.post(
                 os.getenv("API_URL"),
-                json={"image_url": g.image_url, "question": g.question},
+                json={"image_url": g.image_url},
                 headers={"X-API-Key": k.key},
             )
         elif g.image_file:
             response = requests.post(
                 f"{os.getenv('API_URL')}/upload",
                 files={"image": open(g.image_file, "rb")},
-                data={"question": g.question},
                 headers={
                     "X-API-Key": k.key,
                 },
@@ -1180,11 +1149,6 @@ def modal_get():  # noqa: C901
                         hx_post="/check-url",
                         hx_indicator="#spinner",
                     ),
-                    fh.Input(
-                        id="new-question",
-                        name="question",
-                        placeholder="Specify format or question",
-                    ),
                     fh.Button(
                         "Scan",
                         type="submit",
@@ -1210,11 +1174,6 @@ def modal_get():  # noqa: C901
                         hx_post="/check-upload",
                         hx_indicator="#spinner",
                         hx_encoding="multipart/form-data",  # correct file encoding for check-upload since not in form
-                    ),
-                    fh.Input(
-                        id="new-question",
-                        name="question",
-                        placeholder="Specify format or question",
                     ),
                     fh.Button(
                         "Scan",
@@ -1284,7 +1243,6 @@ def modal_get():  # noqa: C901
     def generate_from_url(
         session,
         image_url: str,
-        question: str,
     ):
         # validation
         if not image_url:
@@ -1311,14 +1269,10 @@ def modal_get():  # noqa: C901
         clear_img_input = fh.Input(
             id="new-image-url", name="image_url", placeholder="Enter an image url", hx_swap_oob="true"
         )
-        clear_q_input = fh.Input(
-            id="new-question", name="question", placeholder="Specify format or question", hx_swap_oob="true"
-        )
 
         # Generate as before
         g = GenCreate(
             image_url=image_url,
-            question=question,
             session_id=session["session_id"],
         )
         ## need to put in db since generate_and_save is threaded
@@ -1335,7 +1289,6 @@ def modal_get():  # noqa: C901
         return (
             gen_view(g_read, session),
             clear_img_input,
-            clear_q_input,
             num_gens(len(get_curr_gens(session["session_id"])), "true"),
             gen_manage(gens_present, False, "true"),
             gen_load_more(
@@ -1349,7 +1302,6 @@ def modal_get():  # noqa: C901
     def generate_from_upload(
         session,
         image_file: fh.UploadFile,
-        question: str,
     ):
         if not image_file:
             fh.add_toast(session, "No image uploaded", "error")
@@ -1375,14 +1327,10 @@ def modal_get():  # noqa: C901
         clear_img_input = fh.Input(
             id="new-image-upload", name="image_file", type="file", accept="image/*", hx_swap_oob="true"
         )
-        clear_q_input = fh.Input(
-            id="new-question", name="question", placeholder="Specify format or question", hx_swap_oob="true"
-        )
 
         # Generate as before
         g = GenCreate(
             image_file=str(upload_path),
-            question=question,
             session_id=session["session_id"],
         )
         ## need to put in db since generate_and_save is threaded
@@ -1399,7 +1347,6 @@ def modal_get():  # noqa: C901
         return (
             gen_view(g_read, session),
             clear_img_input,
-            clear_q_input,
             num_gens(len(get_curr_gens(session["session_id"])), "true"),
             gen_manage(gens_present, False, "true"),
             gen_load_more(
@@ -1634,9 +1581,9 @@ def modal_get():  # noqa: C901
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["request_at", "image_url", "image_file", "question", "response", "failed"])
+        writer.writerow(["request_at", "image_url", "image_file", "response", "failed"])
         for g in curr_gens:
-            writer.writerow([g.request_at, g.image_url, Path(g.image_file).name, g.question, g.response, g.failed])
+            writer.writerow([g.request_at, g.image_url, Path(g.image_file).name, g.response, g.failed])
 
         output.seek(0)
         response = fh.Response(

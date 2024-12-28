@@ -11,8 +11,7 @@ import typer
 from typing_extensions import Annotated
 
 
-DEFAULT_IMG_URL = "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
-DEFAULT_QUESTION = "What is the content of this image?"
+DEFAULT_IMG_URL = "https://formless-data.s3.us-west-1.amazonaws.com/train/00001d1472a8709f.png"
 API_URL = "https://andrewhinh--formless-api-modal-get.modal.run"
 
 # Typer CLI
@@ -24,21 +23,18 @@ state = {"verbose": False}
 
 # Fns
 def run() -> None:
-    image_url, image_path, question = state["image_url"], state["image_path"], state["question"]
+    image_url, image_path = state["image_url"], state["image_path"]
 
     response = requests.post(f"{API_URL}/api-key")
     assert response.ok, response.status_code
     api_key = response.json()
 
     if image_url:
-        response = requests.post(
-            API_URL, json={"image_url": image_url, "question": question}, headers={"X-API-Key": api_key}
-        )
+        response = requests.post(API_URL, json={"image_url": image_url}, headers={"X-API-Key": api_key})
     else:
         response = requests.post(
             f"{API_URL}/upload",
             files={"image": open(image_path, "rb")},
-            data={"question": question},
             headers={
                 "X-API-Key": api_key,
             },
@@ -57,9 +53,6 @@ def main(
         str, typer.Option("--image-url", "-i", help="Image URL", rich_help_panel="Inputs")
     ] = DEFAULT_IMG_URL,
     image_path: Annotated[str, typer.Option("--image-path", "-p", help="Image Path", rich_help_panel="Inputs")] = None,
-    question: Annotated[
-        str, typer.Option("--question", "-q", help="Question", rich_help_panel="Inputs")
-    ] = DEFAULT_QUESTION,
     verbose: Annotated[
         int, typer.Option("--verbose", "-v", count=True, help="Verbose mode", rich_help_panel="General")
     ] = 0,
@@ -72,7 +65,6 @@ def main(
             {
                 "image_url": image_url,
                 "image_path": image_path,
-                "question": question,
                 "verbose": verbose > 0,
             }
         )
@@ -92,7 +84,6 @@ def main(
                     raise ValueError("The provided image path is not valid.")
             terminal_image = from_file(image_path)
             terminal_image.draw()
-            print(f"[bold blue]{question}[/bold blue]")
 
         if state["verbose"]:
             print("[red]Press[/red] [blue]Ctrl+C[/blue] [red]to stop at any time.[/red]")
