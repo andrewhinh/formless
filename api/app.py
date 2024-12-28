@@ -1,3 +1,4 @@
+import base64
 import os
 from pathlib import Path
 
@@ -8,14 +9,13 @@ from utils import (
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
+    DEFAULT_SYSTEM_PROMPT,
     GPU_IMAGE,
     IN_PROD,
     MINUTES,
     NAME,
     PARENT_PATH,
-    PRETRAINED_VOLUME,
     REMOTE_DB_URI,
-    RUNS_VOLUME,
     SECRETS,
     VOLUME_CONFIG,
     Colors,
@@ -23,15 +23,23 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = f"/{RUNS_VOLUME}/qwen2-vl/checkpoint-20"  # pretrained model or ckpt
-TOKENIZER = f"/{PRETRAINED_VOLUME}/models--Qwen--Qwen-VL-Chat/snapshots/f57cfbd358cb56b710d963669ad1bcfb44cdcdd8"
-GPU_MEMORY_UTILIZATION = 0.90
-MAX_MODEL_LEN = 2048
+MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained model or ckpt
+QUANTIZATION = "awq_marlin"
+KV_CACHE_DTYPE = None  # "fp8_e5m2"
+LIMIT_MM_PER_PROMPT = {"image": 1}
+ENFORCE_EAGER = False
 MAX_NUM_SEQS = 1
-ENFORCE_EAGER = True
 
+MIN_PIXELS = 28 * 28
+MAX_PIXELS = 1280 * 28 * 28
 TEMPERATURE = 0.2
+TOP_P = 0.001
+REPEATION_PENALTY = 1.05
 MAX_TOKENS = 1024
+STOP_TOKEN_IDS = []
+
+MAX_FILE_SIZE_MB = 5
+MAX_DIMENSIONS = (4096, 4096)
 
 # -----------------------------------------------------------------------------
 
@@ -51,7 +59,18 @@ def download_model():
 # Modal
 IMAGE = (
     GPU_IMAGE.pip_install(  # add Python dependencies
-        "vllm==0.6.2", "term-image==0.7.2", "fastapi==0.115.6", "validators==0.34.0", "sqlmodel==0.0.22", "matplotlib"
+        "vllm==0.6.5",
+        "ninja==1.11.1",  # required to build flash-attn
+        "packaging==23.1",  # required to build flash-attn
+        "wheel==0.41.2",  # required to build flash-attn
+        "torch==2.5.1",  # required to build flash-attn,
+        "term-image==0.7.2",
+        "fastapi==0.115.6",
+        "validators==0.34.0",
+        "sqlmodel==0.0.22",
+    )
+    .run_commands(  # add flash-attn
+        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
     )
     .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
     .run_function(
@@ -129,13 +148,24 @@ def modal_get():  # noqa: C901
 
     llm = LLM(
         model=MODEL,
-        tokenizer=TOKENIZER,
-        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
-        max_model_len=MAX_MODEL_LEN,
-        max_num_seqs=MAX_NUM_SEQS,
+        limit_mm_per_prompt=LIMIT_MM_PER_PROMPT,
         enforce_eager=ENFORCE_EAGER,
+        max_num_seqs=MAX_NUM_SEQS,
         tensor_parallel_size=GPU_COUNT,
         trust_remote_code=True,
+        mm_processor_kwargs={
+            "min_pixels": MIN_PIXELS,
+            "max_pixels": MAX_PIXELS,
+        },
+        **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
+    )
+
+    sampling_params = SamplingParams(
+        temperature=TEMPERATURE,
+        top_p=TOP_P,
+        repetition_penalty=REPEATION_PENALTY,
+        max_tokens=MAX_TOKENS,
+        stop_token_ids=STOP_TOKEN_IDS,
     )
 
     ## helpers
@@ -179,33 +209,31 @@ def modal_get():  # noqa: C901
             raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}") from e
 
         ## send to model
-        prompt = f"<|image|><|begin_of_text|>{question}"
-        stop_token_ids = None
-        sampling_params = SamplingParams(
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            stop_token_ids=stop_token_ids,
-        )
-        inputs = {
-            "prompt": prompt,
-            "multi_modal_data": {"image": pil_image},
-        }
-
-        outputs = llm.generate(inputs, sampling_params=sampling_params)
+        messages = [
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ]
+        outputs = llm.chat(messages, sampling_params)
         generated_text = outputs[0].outputs[0].text.strip()
 
         ## print response
-        response = requests.get(image_url)
         try:
-            response.raise_for_status()
             ext: str = image_url.split("/")[-1].split(".")[-1]
-            upload_path = upload_dir / f"{uuid4()}{ext}"
+            upload_path = upload_dir / f"{uuid4()}.{ext}"
             upload_path.write_bytes(response.content)
         except Exception as e:
             print(f"Error processing image: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}") from e
 
-        terminal_image = from_file(upload_path)
+        image_path = os.path.join(tempfile.gettempdir(), f"{uuid4()}.jpg")
+        pil_image.save(image_path)
+        terminal_image = from_file(image_path)
         terminal_image.draw()
         print(
             Colors.BOLD,
@@ -237,7 +265,7 @@ def modal_get():  # noqa: C901
             raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
 
         ## save
-        upload_path = upload_dir / f"{uuid4()}{file_extension}"
+        upload_path = upload_dir / f"{uuid4()}.{file_extension}"
         upload_path.write_bytes(image_data)
         try:
             pil_image = Image.open(upload_path).convert("RGB")
@@ -254,8 +282,6 @@ def modal_get():  # noqa: C901
             raise HTTPException(status_code=400, detail="Invalid image data.") from e
 
         ## size
-        MAX_FILE_SIZE_MB = 5
-        MAX_DIMENSIONS = (4096, 4096)
         if os.path.getsize(upload_path) > MAX_FILE_SIZE_MB * 1024 * 1024:
             os.remove(upload_path)
             print(f"File size exceeds {MAX_FILE_SIZE_MB}MB limit.")
@@ -288,19 +314,20 @@ def modal_get():  # noqa: C901
             raise HTTPException(status_code=500, detail=f"Error during antivirus scan: {e}") from e
 
         ## send to model
-        prompt = f"<|image|><|begin_of_text|>{question}"
-        stop_token_ids = None
-        sampling_params = SamplingParams(
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            stop_token_ids=stop_token_ids,
-        )
-        inputs = {
-            "prompt": prompt,
-            "multi_modal_data": {"image": pil_image},
-        }
-
-        outputs = llm.generate(inputs, sampling_params=sampling_params)
+        with open(upload_path, "rb") as image_file:
+            base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+        image_url = f"data:image/jpeg;base64,{base64_img}"
+        messages = [
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ]
+        outputs = llm.chat(messages, sampling_params)
         generated_text = outputs[0].outputs[0].text.strip()
 
         ## print response
