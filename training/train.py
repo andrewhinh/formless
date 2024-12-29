@@ -4,35 +4,41 @@ import os
 
 import modal
 
-from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
+from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG, _exec_subprocess
 
 # -----------------------------------------------------------------------------
 
 IMAGE = (
     GPU_IMAGE.apt_install("git")
-    .run_commands(["git clone https://github.com/QwenLM/Qwen-VL.git"])
-    .copy_local_file("training/finetune.py", "/Qwen-VL/finetune.py")
-    .copy_local_file("training/finetune_ds.sh", "/Qwen-VL/finetune/finetune_ds.sh")
-    .copy_local_file("training/ds_config_zero3.json", "/Qwen-VL/finetune/ds_config_zero3.json")
+    .run_commands(
+        [
+            "git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git",
+            "cd /LLaMA-Factory && pip install -e '.[torch,metrics]'",
+        ]
+    )
+    .copy_local_file("training/dataset_info.json", "/LLaMA-Factory/data/dataset_info.json")
+    .copy_local_file("training/ds_z3_config.json", "/LLaMA-Factory/ds_z3_config.json")
+    .copy_local_file("training/qwen2vl_full_sft.yaml", "/LLaMA-Factory/qwen2vl_full_sft.yaml")
     .pip_install(
-        "transformers",
-        "accelerate",
-        "tiktoken",
-        "einops",
-        "transformers_stream_generator==0.0.4",
-        "scipy",
-        "torchvision",
-        "pillow",
-        "tensorboard",
-        "matplotlib",
-        "deepspeed",
-        "peft",
+        "deepspeed==0.15.4",
+        "ninja==1.11.1",  # required to build flash-attn
+        "packaging==23.1",  # required to build flash-attn
+        "wheel==0.41.2",  # required to build flash-attn
+        "torch==2.5.1",  # required to build flash-attn
+    )
+    .run_commands(  # add flash-attn
+        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
+    )
+    .env(
+        {
+            "FORCE_TORCHRUN": "1",
+        }
     )
 )
 TRAIN_TIMEOUT = 24 * 60 * MINUTES
 
 GPU_TYPE = "H100"
-GPU_COUNT = 1
+GPU_COUNT = 2
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
@@ -55,14 +61,19 @@ with IMAGE.imports():
     timeout=TRAIN_TIMEOUT,
 )
 def run():
-    os.chdir("/Qwen-VL")
+    os.chdir("/LLaMA-Factory")
     _exec_subprocess(
         [
-            "sh",
-            "finetune/finetune_ds.sh",
-            str(GPU_COUNT),
+            "cp",
             f"/{DATA_VOLUME}/train/data.json",
-            f"/{RUNS_VOLUME}/qwen2-vl",
+            "data/data.json",
+        ]
+    )
+    _exec_subprocess(
+        [
+            "llamafactory-cli",
+            "train",
+            "qwen2vl_full_sft.yaml",
         ]
     )
 
