@@ -1,4 +1,4 @@
-"""ETL for randomly selected train samples to FT Qwen2-VL."""
+"""ETL for randomly selected samples to FT and eval Qwen2-VL."""
 
 import base64
 import json
@@ -7,25 +7,28 @@ import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-
-# import re
 from xml.etree import ElementTree
 
 import modal
 
-from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
+from utils import DATA_VOLUME, DEFAULT_QUESTION, DEFAULT_SYSTEM_PROMPT, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG
 
 # -----------------------------------------------------------------------------
 
 MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"
-QUANTIZATION = "awq"
-KV_CACHE_DTYPE = "fp8_e5m2"
-ENFORCE_EAGER = True
+QUANTIZATION = "awq_marlin"
+KV_CACHE_DTYPE = None  # "fp8_e5m2"
+ENFORCE_EAGER = False
 MAX_NUM_SEQS = 1
 
-WRITE_TEMPERATURE = 0.2
-WRITE_MAX_TOKENS = 5
-WRITING_QUALITY_PROMPT = """
+MIN_PIXELS = 28 * 28
+MAX_PIXELS = 1280 * 28 * 28
+TEMPERATURE = 0.2
+TOP_P = 0.001
+REPEATION_PENALTY = 1.05
+MAX_TOKENS = 5
+STOP_TOKEN_IDS = []
+PROMPT = """
 You are given an image of a math expression and its corresponding annotation.
 
 Determine the quality of the handwriting in the image using the additive 3-point scoring system described below. Points are accumulated based on the satisfaction of each criterion:
@@ -36,17 +39,10 @@ Determine the quality of the handwriting in the image using the additive 3-point
 Return the quality of the handwriting as a number between 1 and 3.
 """
 
-QUERY_TEMPERATURE = 1.0
-QUERY_MAX_TOKENS = 1024
-USER_QUERY_PROMPT = """
-You are a user of a handwriting OCR app, and have an image you want annotated.
-Come up with a variation of the question: What does this image show?
-Be creative! Vary in length, spelling, and punctuation.
-"""
-
 SPLITS = ["train"]
-N_SAMPLES = 500
-MINHASH_THRESHOLD = 0.8
+RANDOM_SEED = 42
+N_SAMPLES = 1000
+THRESHOLD = 0.8
 NUM_PERM = 128
 HASH_SZ = 16
 
@@ -65,7 +61,14 @@ def download_model():
 
 
 IMAGE = (
-    GPU_IMAGE.apt_install(["libcairo2-dev", "libjpeg-dev", "libgif-dev"])
+    GPU_IMAGE.apt_install(
+        [
+            "libcairo2-dev",  # required to build pycairo
+            "libjpeg-dev",  # required to build pycairo
+            "libgif-dev",  # required to build pycairo
+            "openjdk-11-jdk",  # required to build pyspark
+        ]
+    )
     .pip_install(
         "vllm==0.6.5",
         "ninja==1.11.1",  # required to build flash-attn
@@ -73,11 +76,11 @@ IMAGE = (
         "wheel==0.41.2",  # required to build flash-attn
         "torch==2.5.1",  # required to build flash-attn
         "pycairo==1.27.0",
-        # "jiwer==3.0.5",
         "pydantic==2.10.4",
         "tqdm==4.67.1",
         "datasketch==1.6.5",
         "ImageHash==4.3.1",
+        "pyspark==3.5.4",
     )
     .run_commands(  # add flash-attn
         "pip install flash-attn==2.7.2.post1 --no-build-isolation"
@@ -104,16 +107,18 @@ app = modal.App(name=APP_NAME)
 
 with IMAGE.imports():
     import cairo
-
-    # import jiwer
     import numpy as np
     from datasketch import MinHash, MinHashLSH
     from imagehash import phash
     from PIL import Image
     from pydantic import Field
-    from tqdm import tqdm
+    from pyspark.sql import Row, SparkSession
+    from pyspark.sql.functions import col
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
+
+    spark = SparkSession.builder.appName(APP_NAME).getOrCreate()
+    random.seed(RANDOM_SEED)
 
     @dataclass
     class Ink:
@@ -129,38 +134,6 @@ with IMAGE.imports():
             ...,
             description="Metadata present in the InkML.",
         )
-
-    def read_inkml_file(filename: str) -> Ink:
-        """Simple reader for MathWriting's InkML files."""
-        with open(filename, "r") as f:
-            root = ElementTree.fromstring(f.read())  # noqa: S314
-
-        strokes = []
-        annotations = {}
-
-        for element in root:
-            tag_name = element.tag.removeprefix("{http://www.w3.org/2003/InkML}")
-            if tag_name == "annotation":
-                annotations[element.attrib.get("type")] = element.text
-
-            elif tag_name == "trace":
-                points = element.text.split(",")
-                stroke_x, stroke_y, stroke_t = [], [], []
-                for point in points:
-                    x, y, t = point.split(" ")
-                    stroke_x.append(float(x))
-                    stroke_y.append(float(y))
-                    stroke_t.append(float(t))
-                strokes.append(np.array((stroke_x, stroke_y, stroke_t)))
-
-        return Ink(strokes=strokes, annotations=annotations)
-
-    def cairo_to_pil(surface: cairo.ImageSurface) -> Image:
-        """Converts a ARGB Cairo surface into an RGB PIL image."""
-        size = (surface.get_width(), surface.get_height())
-        stride = surface.get_stride()
-        with surface.get_data() as memory:
-            return Image.frombuffer("RGB", size, memory.tobytes(), "raw", "BGRX", stride)
 
     def render_ink(
         ink: Ink,
@@ -224,7 +197,25 @@ with IMAGE.imports():
                     ctx.line_to(*apply_transform(ink_x, ink_y))
                 ctx.stroke()
 
-        return cairo_to_pil(surface)
+        # cairo to pil
+        size = (surface.get_width(), surface.get_height())
+        stride = surface.get_stride()
+        with surface.get_data() as memory:
+            return Image.frombuffer("RGB", size, memory.tobytes(), "raw", "BGRX", stride)
+
+    def dedup_per_split(split_df):
+        lsh = MinHashLSH(threshold=THRESHOLD, num_perm=NUM_PERM)
+
+        def is_duplicate(row):
+            img_hash = phash(Image.open(row.img_path), hash_size=HASH_SZ)
+            m = MinHash(num_perm=NUM_PERM)
+            m.update(str(img_hash).encode("utf8"))
+            if not lsh.query(m):
+                lsh.insert(f"{row.img_path}_{row.writing_quality}", m)
+                return False
+            return True
+
+        return split_df.rdd.filter(lambda row: not is_duplicate(row)).toDF(split_df.schema)
 
 
 @app.function(
@@ -234,29 +225,30 @@ with IMAGE.imports():
     secrets=SECRETS,
     timeout=ETL_TIMEOUT,
 )
-def analyze_ink(filename: Path) -> dict:
+def analyze_ink(filename: Path) -> dict[Path, int, str]:
     llm = LLM(
         model=MODEL,
         enforce_eager=ENFORCE_EAGER,
         max_num_seqs=MAX_NUM_SEQS,
         tensor_parallel_size=GPU_COUNT,
+        trust_remote_code=True,
+        mm_processor_kwargs={
+            "min_pixels": MIN_PIXELS,
+            "max_pixels": MAX_PIXELS,
+        },
         **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
     )
 
-    stop_token_ids = None
-    write_samp_params = SamplingParams(
-        temperature=WRITE_TEMPERATURE,
-        max_tokens=WRITE_MAX_TOKENS,
-        stop_token_ids=stop_token_ids,
+    sampling_params = SamplingParams(
+        temperature=TEMPERATURE,
+        top_p=TOP_P,
+        repetition_penalty=REPEATION_PENALTY,
+        max_tokens=MAX_TOKENS,
+        stop_token_ids=STOP_TOKEN_IDS,
         guided_decoding=GuidedDecodingParams(choice=[1, 2, 3]),
     )
-    query_samp_params = SamplingParams(
-        temperature=QUERY_TEMPERATURE,
-        max_tokens=QUERY_MAX_TOKENS,
-        stop_token_ids=stop_token_ids,
-    )
 
-    def model_call(prompt: str, samp_params: SamplingParams, img_url: str = None):
+    def model_call(prompt: str, img_url: str = None):
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -268,11 +260,31 @@ def analyze_ink(filename: Path) -> dict:
         ]
         if img_url is not None:
             messages[1]["content"].append({"type": "image_url", "image_url": {"url": img_url}})
-        outputs = llm.chat(messages, samp_params)
+        outputs = llm.chat(messages, sampling_params)
         generated_text = outputs[0].outputs[0].text.strip()
         return generated_text
 
-    ink = read_inkml_file(filename)
+    # read inkml
+    with open(filename, "r") as f:
+        root = ElementTree.fromstring(f.read())  # noqa: S314
+    strokes = []
+    annotations = {}
+    for element in root:
+        tag_name = element.tag.removeprefix("{http://www.w3.org/2003/InkML}")
+        if tag_name == "annotation":
+            annotations[element.attrib.get("type")] = element.text
+        elif tag_name == "trace":
+            points = element.text.split(",")
+            stroke_x, stroke_y, stroke_t = [], [], []
+            for point in points:
+                x, y, t = point.split(" ")
+                stroke_x.append(float(x))
+                stroke_y.append(float(y))
+                stroke_t.append(float(t))
+            strokes.append(np.array((stroke_x, stroke_y, stroke_t)))
+    ink = Ink(strokes=strokes, annotations=annotations)
+
+    # render ink and save
     img_path = filename.with_suffix(".png")
     img = render_ink(ink)
     if os.path.exists(img_path):
@@ -281,10 +293,9 @@ def analyze_ink(filename: Path) -> dict:
     with open(img_path, "rb") as image_file:
         base64_img = base64.b64encode(image_file.read()).decode("utf-8")
     img_url = f"data:image/jpeg;base64,{base64_img}"
-    writing_quality = int(model_call(WRITING_QUALITY_PROMPT, write_samp_params, img_url))
-    user_query = model_call(USER_QUERY_PROMPT, query_samp_params, img_url)
+    writing_quality = int(model_call(PROMPT, img_url))
     label = ink.annotations["label"]
-    return {"img_path": img_path, "writing_quality": writing_quality, "user_query": user_query, "label": label}
+    return {"img_path": img_path, "writing_quality": writing_quality, "label": label}
 
 
 @app.function(
@@ -295,71 +306,81 @@ def analyze_ink(filename: Path) -> dict:
 )
 def run():
     # collect metadata
-    metadata = {}
+    df = spark.createDataFrame([], schema="img_path string, writing_quality int, label string, split string")
     for split in SPLITS:
-        filenames = []
-        file_list = list(Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml"))
-        random.shuffle(file_list)
-        file_list = file_list[:N_SAMPLES]
-        for filename in tqdm(file_list, desc=f"Processing {split}", unit="file"):
-            filenames.append(filename)
-        split_stats = list(analyze_ink.map(filenames))
-        metadata[split] = split_stats
-        print(f"Collected {len(metadata[split])} samples for split {split}")
+        filenames = list(Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml"))
+        random.shuffle(filenames)
+        filenames = filenames[:N_SAMPLES]
+        split_stats = analyze_ink.map(filenames)
+        split_df = spark.createDataFrame(
+            [
+                Row(
+                    img_path=str(stat["img_path"]),
+                    writing_quality=stat["writing_quality"],
+                    label=stat["label"],
+                    split=split,
+                )
+                for stat in split_stats
+            ],
+            schema=df.schema,
+        )
+        new_entries = split_df.join(df, on=["img_path", "split"], how="left_anti")
+        df = df.unionByName(new_entries)
+        print(f"Collected {split_df.count()} samples for split {split}")
 
     # filter to only get data with writing quality == 1
-    filtered = {}
-    for split, stats in metadata.items():
-        filtered[split] = []
-        for stat in stats:
-            if stat["writing_quality"] == 1:
-                filtered[split].append(stat)
-        print(f"Found {len(filtered[split])} samples with writing quality == 1 for split {split}")
+    filtered_dfs = []
+    for split in SPLITS:
+        split_df = df.filter(col("split") == split)
+        split_filter_df = split_df.filter(split_df.writing_quality == 1)
+        filtered_dfs.append(split_filter_df)
+        print(f"Found {split_filter_df.count()} samples with writing quality == 1 for split {split}")
+    filter_df = filtered_dfs[0]
+    for filtered_df in filtered_dfs[1:]:
+        filter_df = filter_df.unionByName(filtered_df)
+    df = filter_df
 
     # deduplication
-    lsh = MinHashLSH(threshold=MINHASH_THRESHOLD, num_perm=NUM_PERM)  # LSH for near-duplicates
-    dedup = {}
-    for split, stats in filtered.items():
-        dedup[split] = []
-        for stat in stats:
-            img_hash = phash(Image.open(stat["img_path"]), hash_size=HASH_SZ)
-            m = MinHash(num_perm=NUM_PERM)
-            m.update(str(img_hash).encode("utf8"))
+    dedup_dfs = []
+    for split in SPLITS:
+        split_df = df.filter(col("split") == split)
+        split_dedup_df = dedup_per_split(split_df)
+        dedup_dfs.append(split_dedup_df)
+        print(f"Found {split_dedup_df.count()} deduplicated samples for split {split}")
+    final_dedup_df = dedup_dfs[0]
+    for dedup_df in dedup_dfs[1:]:
+        final_dedup_df = final_dedup_df.unionByName(dedup_df)
+    df = final_dedup_df
 
-            duplicates = lsh.query(m)
-            if not duplicates:
-                lsh.insert(f"{split}_{len(dedup[split])}", m)
-                dedup[split].append(stat)
-            else:
-                existing_stat = dedup[split][duplicates[0]]
-                if stat["writing_quality"] > existing_stat["writing_quality"]:
-                    dedup[split][duplicates[0]] = stat
-        dedup[split] = sorted(dedup[split], key=lambda x: x["writing_quality"], reverse=True)
-        print(f"Found {len(dedup[split])} unique samples for split {split}")
-
-    # write to jsonl
-    id = 0
-    items = []
-    for split in dedup.keys():
-        for item in dedup[split]:
-            format_item = {
-                "id": id,
-                "conversations": [
+    # write to json
+    for split in SPLITS:
+        output_path = Path(f"/{DATA_VOLUME}/{split}/data.json")
+        split_df = df.filter(col("split") == split)
+        json_output = []
+        for row in split_df.collect():
+            json_entry = {
+                "messages": [
                     {
-                        "from": "user",
-                        "value": f"Picture 1: <img>{str(item['img_path'])}</img>\n{item['user_query']}",
+                        "content": DEFAULT_SYSTEM_PROMPT,
+                        "role": "system",
                     },
                     {
-                        "from": "assistant",
-                        "value": item["label"],
+                        "content": f"<image>{DEFAULT_QUESTION}",
+                        "role": "user",
+                    },
+                    {
+                        "content": row.label,
+                        "role": "assistant",
                     },
                 ],
+                "images": [
+                    row.img_path,
+                ],
             }
-            items.append(format_item)
-            id += 1
-
-    with open(Path(f"/{DATA_VOLUME}/{split}/data.json"), "w") as f:
-        json.dump(items, f, indent=4)
+            json_output.append(json_entry)
+        with open(output_path, "w") as f:
+            json.dump(json_output, f, indent=4)
+        print(f"Deduplicated data written to {output_path}")
 
 
 @app.local_entrypoint()
