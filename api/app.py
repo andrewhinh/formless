@@ -16,6 +16,7 @@ from utils import (
     NAME,
     PARENT_PATH,
     REMOTE_DB_URI,
+    RUNS_VOLUME,
     SECRETS,
     VOLUME_CONFIG,
     Colors,
@@ -23,8 +24,9 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained model or ckpt
-QUANTIZATION = "awq_marlin"
+MODEL = f"/{RUNS_VOLUME}/qwen2-vl/checkpoint-330"  # pretrained model or ckpt
+TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
+QUANTIZATION = None  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
 LIMIT_MM_PER_PROMPT = {"image": 1}
 ENFORCE_EAGER = False
@@ -46,14 +48,22 @@ MAX_DIMENSIONS = (4096, 4096)
 
 # container build-time fns
 def download_model():
-    if not os.path.exists(MODEL):
-        from huggingface_hub import login, snapshot_download
+    from huggingface_hub import login, snapshot_download
 
+    if not os.path.exists(MODEL):
         login(token=os.getenv("HF_TOKEN"), new_session=False)
         snapshot_download(
             MODEL,
             ignore_patterns=["*.pt", "*.bin"],
         )
+    else:  # check if preprocessor_config.json was successfully copied; if not, do so
+        if not os.path.exists(f"{MODEL}/preprocessor_config.json"):
+            login(token=os.getenv("HF_TOKEN"), new_session=False)
+            tok_path = snapshot_download(
+                TOKENIZER,
+                ignore_patterns=["*.pt", "*.bin"],
+            )
+            os.rename(f"{tok_path}/preprocessor_config.json", f"{MODEL}/preprocessor_config.json")
 
 
 # Modal
@@ -84,7 +94,7 @@ API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 1 * MINUTES  # max
 API_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
-GPU_TYPE = "l4"
+GPU_TYPE = "H100"
 GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
@@ -148,6 +158,7 @@ def modal_get():  # noqa: C901
 
     llm = LLM(
         model=MODEL,
+        tokenizer=TOKENIZER,
         limit_mm_per_prompt=LIMIT_MM_PER_PROMPT,
         enforce_eager=ENFORCE_EAGER,
         max_num_seqs=MAX_NUM_SEQS,
@@ -380,7 +391,7 @@ def main():
 
 
 # TODO
-# - Replace with custom model impl FT on hard images
+# - quantize ft model: https://github.com/QwenLM/Qwen2-VL?tab=readme-ov-file#quantize-your-own-model-with-autoawq
 # - Add custom CUDA kernels for faster inference
 
 # - move to postgres
