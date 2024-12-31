@@ -16,7 +16,6 @@ from utils import (
     NAME,
     PARENT_PATH,
     REMOTE_DB_URI,
-    RUNS_VOLUME,
     SECRETS,
     VOLUME_CONFIG,
     Colors,
@@ -24,7 +23,7 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = f"/{RUNS_VOLUME}/qwen2-vl/checkpoint-330"  # pretrained model or ckpt
+MODEL = "andrewhinh/qwen2-vl"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
 QUANTIZATION = None  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"

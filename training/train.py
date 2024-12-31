@@ -3,8 +3,9 @@
 import os
 
 import modal
+import yaml
 
-from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, SECRETS, VOLUME_CONFIG, _exec_subprocess
+from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
 
 # -----------------------------------------------------------------------------
 
@@ -50,7 +51,10 @@ app = modal.App(name=APP_NAME)
 # -----------------------------------------------------------------------------
 
 with IMAGE.imports():
-    pass
+    from pathlib import Path
+
+    from huggingface_hub import HfApi
+    from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
 
 @app.function(
@@ -61,6 +65,7 @@ with IMAGE.imports():
     timeout=TRAIN_TIMEOUT,
 )
 def run():
+    # run training
     os.chdir("/LLaMA-Factory")
     _exec_subprocess(
         [
@@ -76,6 +81,23 @@ def run():
             "qwen2vl_full_sft.yaml",
         ]
     )
+
+    # hack to upload ckpt to hub
+    checkpoint_folder = max(
+        list((Path(f"/{RUNS_VOLUME}/qwen2-vl").glob("checkpoint-*"))),
+        key=lambda x: int(x.name.split("-")[-1]),
+    )
+    model = Qwen2VLForConditionalGeneration.from_pretrained(str(checkpoint_folder))
+    processor = AutoProcessor.from_pretrained(str(checkpoint_folder))
+    api = HfApi()
+    user_info = api.whoami(token=os.getenv("HF_TOKEN"))
+    username = user_info["name"]
+    with open("/LLaMA-Factory/qwen2vl_full_sft.yaml", "r") as f:
+        config = yaml.safe_load(f)
+        output_dir = config["output_dir"]
+    output_dir = output_dir.split("/")[-1]
+    model.push_to_hub(username + "/" + output_dir)
+    processor.push_to_hub(username + "/" + output_dir)
 
     # TODO: use to create tokens and test model
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
