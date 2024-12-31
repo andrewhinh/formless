@@ -35,8 +35,8 @@ IMAGE = (
     .copy_local_dir(PARENT_PATH / "db", "/root/db")
 )
 
-FE_TIMEOUT = 24 * 60 * MINUTES  # max
-FE_CONTAINER_IDLE_TIMEOUT = 20 * MINUTES  # max
+FE_TIMEOUT = 5 * MINUTES  # max
+FE_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
 FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 

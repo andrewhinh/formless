@@ -143,3 +143,11 @@ def run():
 @app.local_entrypoint()
 def main():
     run.remote()
+
+
+# TODO:
+# - quantize ft model: https://github.com/QwenLM/Qwen2-VL?tab=readme-ov-file#quantize-your-own-model-with-autoawq
+# - add dpo ft to see if it helps: https://github.com/hiyouga/LLaMA-Factory/blob/main/examples/train_lora/qwen2vl_lora_dpo.yaml
+# - recreate in pytorch and inc torchtitan
+# - replace slow act + fns with custom CUDA kernels
+#   - better yet: recreate in C/Cuda

@@ -112,6 +112,7 @@ def main(
 
 
 # TODO:
+# - add python bindings
 # - add multiple uploads/urls
 # - add user authentication:
 #   - save gens and keys to user account

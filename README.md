@@ -16,10 +16,6 @@ Or use the CLI:
 uv run formless -i <image-url> [-v]
 ```
 
-Soon:
-
-- Python bindings.
-
 ## Development
 
 ### Set Up
@@ -157,4 +153,10 @@ Run ETL:
 
 ```bash
 modal run training/etl.py
+```
+
+Run training:
+
+```bash
+modal run training/train.py
 ```
