@@ -23,9 +23,9 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = "andrewhinh/qwen2-vl"  # pretrained model or ckpt
+MODEL = "andrewhinh/qwen2-vl-7b-instruct-awq"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
-QUANTIZATION = None  # "awq_marlin"
+QUANTIZATION = "awq_marlin"  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
 LIMIT_MM_PER_PROMPT = {"image": 1}
 ENFORCE_EAGER = False
@@ -93,7 +93,7 @@ API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
 API_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
-GPU_TYPE = "H100"
+GPU_TYPE = "l4"
 GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
@@ -390,9 +390,6 @@ def main():
 
 
 # TODO
-# - quantize ft model: https://github.com/QwenLM/Qwen2-VL?tab=readme-ov-file#quantize-your-own-model-with-autoawq
-# - Add custom CUDA kernels for faster inference
-
 # - move to postgres
 # - add multiple uploads/urls
 # - add user authentication:
