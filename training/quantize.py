@@ -21,12 +21,6 @@ SAVE_HUB = "andrewhinh/qwen2-vl-7b-instruct-awq"
 IMAGE = GPU_IMAGE.pip_install(
     "autoawq==0.2.7.post3",
     "torchvision==0.20.1",
-    "ninja==1.11.1",  # required to build flash-attn
-    "packaging==23.1",  # required to build flash-attn
-    "wheel==0.41.2",  # required to build flash-attn
-    "torch==2.5.1",  # required to build flash-attn
-).run_commands(  # add flash-attn
-    "pip install flash-attn==2.7.2.post1 --no-build-isolation"
 )
 QUANTIZE_TIMEOUT = 24 * 60 * MINUTES
 

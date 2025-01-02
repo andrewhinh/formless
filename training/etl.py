@@ -70,20 +70,12 @@ IMAGE = (
         ]
     )
     .pip_install(
-        "vllm==0.6.5",
-        "ninja==1.11.1",  # required to build flash-attn
-        "packaging==23.1",  # required to build flash-attn
-        "wheel==0.41.2",  # required to build flash-attn
-        "torch==2.5.1",  # required to build flash-attn
         "pycairo==1.27.0",
         "pydantic==2.10.4",
         "tqdm==4.67.1",
         "datasketch==1.6.5",
         "ImageHash==4.3.1",
         "pyspark==3.5.4",
-    )
-    .run_commands(  # add flash-attn
-        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
     )
     .run_function(
         download_model,

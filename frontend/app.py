@@ -11,7 +11,6 @@ from utils import (
     NAME,
     PARENT_PATH,
     PYTHON_VERSION,
-    REMOTE_DB_URI,
     SECRETS,
     VOLUME_CONFIG,
 )
@@ -22,14 +21,17 @@ IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .apt_install("git")
     .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
+    .apt_install("libpq-dev")  # for psycopg2
     .pip_install(  # add Python dependencies
         "python-fasthtml==0.6.10",
+        "sqlite-minutils==4.0.3",  # needed for fasthtml
         "simpleicons==7.21.0",
         "requests==2.32.3",
         "stripe==11.1.0",
         "validators==0.34.0",
         "pillow==11.0.0",
         "sqlmodel==0.0.22",
+        "psycopg2==2.9.10",
     )
     .copy_local_file(FE_PATH / "favicon.ico", "/root/favicon.ico")
     .copy_local_dir(PARENT_PATH / "db", "/root/db")
@@ -162,7 +164,7 @@ def modal_get():  # noqa: C901
     os.chmod(upload_dir, 0o600)  # Read/write by owner only
 
     engine = create_engine(
-        url=REMOTE_DB_URI,
+        url=os.getenv("POSTGRES_URL"),
         echo=not IN_PROD,
     )
 
@@ -239,6 +241,7 @@ def modal_get():  # noqa: C901
         session,
     ):
         ### check if g is valid
+        VOLUME_CONFIG[f"/{DB_VOLUME}"].reload()
         with get_db_session() as db_session:
             if db_session.get(Gen, g.id) is None:
                 fh.add_toast(session, "Please refresh the page", "error")
@@ -348,7 +351,7 @@ def modal_get():  # noqa: C901
                     fh.Div(
                         fh.P(
                             g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
-                            onclick=f"navigator.clipboard.writeText('{g.response}');",
+                            onclick=f"navigator.clipboard.writeText('{g.response.replace(chr(92), chr(92)*2)}');",  # since latex includes backslashes
                             hx_post="/toast?message=Copied to clipboard!&type=success",
                             hx_indicator="#spinner",
                             hx_target="#toast-container",
@@ -924,6 +927,7 @@ def modal_get():  # noqa: C901
         #     db_session.add(g)
         #     db_session.commit()
         #     db_session.refresh(g)
+        #     VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         #     return
 
         # TODO: uncomment for debugging
@@ -932,6 +936,7 @@ def modal_get():  # noqa: C901
         #     db_session.add(g)
         #     db_session.commit()
         #     db_session.refresh(g)
+        #     VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         #     return
 
         if g.image_url:
@@ -958,6 +963,7 @@ def modal_get():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
 
     def generate_key_and_save(
         k: ApiKeyCreate,
@@ -968,6 +974,7 @@ def modal_get():  # noqa: C901
             db_session.add(k)
             db_session.commit()
             db_session.refresh(k)
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         return k
 
     ## SSE helpers
@@ -988,7 +995,7 @@ def modal_get():  # noqa: C901
                     ) if curr_state == "loading" else
                     fh.P(
                         curr_gen.response[:limit_chars] + ("..." if len(curr_gen.response) > limit_chars else ""),
-                        onclick=f"navigator.clipboard.writeText('{curr_gen.response}');",
+                        onclick=f"navigator.clipboard.writeText('{curr_gen.response.replace(chr(92), chr(92)*2)}');",
                         hx_post="/toast?message=Copied to clipboard!&type=success",
                         hx_indicator="#spinner",
                         hx_target="#toast-container",
@@ -1233,6 +1240,7 @@ def modal_get():  # noqa: C901
             db_session.add(curr_balance)
             db_session.commit()
             db_session.refresh(curr_balance)
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
 
         # Clear input
         clear_img_input = fh.Input(
@@ -1250,6 +1258,7 @@ def modal_get():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         global shown_generations
         shown_generations[g.id] = "loading"
         generate_and_save(g, session)
@@ -1291,6 +1300,7 @@ def modal_get():  # noqa: C901
             db_session.add(curr_balance)
             db_session.commit()
             db_session.refresh(curr_balance)
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
 
         # Clear input
         clear_img_input = fh.Input(
@@ -1308,6 +1318,7 @@ def modal_get():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         global shown_generations
         shown_generations[g.id] = "loading"
         generate_and_save(g, session)
@@ -1364,6 +1375,7 @@ def modal_get():  # noqa: C901
             with get_db_session() as db_session:
                 db_session.delete(g)
                 db_session.commit()
+                VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
             shown_generations.pop(g.id, None)
         fh.add_toast(session, "Deleted generations.", "success")
         return (
@@ -1389,6 +1401,7 @@ def modal_get():  # noqa: C901
             with get_db_session() as db_session:
                 db_session.delete(k)
                 db_session.commit()
+                VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
             shown_keys = [key for key in shown_keys if key != k.id]
         fh.add_toast(session, "Deleted keys.", "success")
         return (
@@ -1417,6 +1430,7 @@ def modal_get():  # noqa: C901
                         os.remove(g.image_file)
                     db_session.delete(g)
                     db_session.commit()
+                    VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
                     shown_generations.pop(g.id, None)
             fh.add_toast(session, "Deleted generations.", "success")
             gens_present = bool(get_curr_gens(session["session_id"], number=1))
@@ -1449,6 +1463,7 @@ def modal_get():  # noqa: C901
                 for k in select_keys:
                     db_session.delete(k)
                     db_session.commit()
+                    VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
                     shown_keys = [key for key in shown_keys if key != k.id]
             fh.add_toast(session, "Deleted keys.", "success")
             keys_present = bool(get_curr_keys(session["session_id"], number=1))
@@ -1491,6 +1506,7 @@ def modal_get():  # noqa: C901
                 os.remove(gen.image_file)
             db_session.delete(gen)
             db_session.commit()
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         global shown_generations
         shown_generations.pop(gen_id, None)
         fh.add_toast(session, "Deleted generation.", "success")
@@ -1519,6 +1535,7 @@ def modal_get():  # noqa: C901
             key = db_session.get(ApiKey, key_id)
             db_session.delete(key)
             db_session.commit()
+            VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         global shown_keys
         shown_keys = [key for key in shown_keys if key != key_id]
         fh.add_toast(session, "Deleted key.", "success")
@@ -1648,13 +1665,13 @@ def modal_get():  # noqa: C901
                 db_session.add(curr_balance)
                 db_session.commit()
                 db_session.refresh(curr_balance)
+                VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
             return {"status": "success"}, 200
 
     return f_app
 
 
 # TODO:
-# - move to postgres b/c of Modal volume limitations
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add user authentication:
 #   - save gens and keys to user account

@@ -42,7 +42,15 @@ GPU_IMAGE = (
     )
     .apt_install("git")  # add system dependencies
     .pip_install(  # add Python dependencies
+        "vllm==0.6.5",
         "hf_transfer==0.1.8",
+        "ninja==1.11.1",  # required to build flash-attn
+        "packaging==23.1",  # required to build flash-attn
+        "wheel==0.41.2",  # required to build flash-attn
+        "torch==2.5.1",  # required to build flash-attn,
+    )
+    .run_commands(  # add flash-attn
+        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
     )
     .env(
         {
@@ -52,10 +60,6 @@ GPU_IMAGE = (
         }
     )
 )
-
-DB_NAME = "main.db"
-LOCAL_DB_URI = f"sqlite:///db/migrations/{DB_NAME}"
-REMOTE_DB_URI = f"sqlite:////{DB_VOLUME}/{DB_NAME}"
 
 
 ## subprocess for Modal

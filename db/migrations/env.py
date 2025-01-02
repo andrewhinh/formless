@@ -1,11 +1,17 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from db import models  # noqa: F401
-from utils import LOCAL_DB_URI
+
+env = context.get_x_argument(as_dictionary=True).get("env", "dev")
+env_file = ".env" if env != "dev" else ".env.dev"
+load_dotenv(env_file)
+
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -41,7 +47,7 @@ def run_migrations_offline() -> None:
 
     """
     context.configure(
-        url=LOCAL_DB_URI,
+        url=os.getenv("POSTGRES_URL"),  # set as env var in Makefile cmd
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
@@ -59,7 +65,7 @@ def run_migrations_online() -> None:
 
     """
     configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = LOCAL_DB_URI
+    configuration["sqlalchemy.url"] = os.getenv("POSTGRES_URL")
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

@@ -15,7 +15,6 @@ from utils import (
     MINUTES,
     NAME,
     PARENT_PATH,
-    REMOTE_DB_URI,
     SECRETS,
     VOLUME_CONFIG,
     Colors,
@@ -68,18 +67,11 @@ def download_model():
 # Modal
 IMAGE = (
     GPU_IMAGE.pip_install(  # add Python dependencies
-        "vllm==0.6.5",
-        "ninja==1.11.1",  # required to build flash-attn
-        "packaging==23.1",  # required to build flash-attn
-        "wheel==0.41.2",  # required to build flash-attn
-        "torch==2.5.1",  # required to build flash-attn,
         "term-image==0.7.2",
         "fastapi==0.115.6",
         "validators==0.34.0",
         "sqlmodel==0.0.22",
-    )
-    .run_commands(  # add flash-attn
-        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
+        "psycopg2-binary==2.9.10",
     )
     .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
     .run_function(
@@ -143,7 +135,7 @@ def modal_get():  # noqa: C901
     ## setup
     f_app = FastAPI()
     engine = create_engine(
-        url=REMOTE_DB_URI,
+        url=os.getenv("POSTGRES_URL"),
         echo=not IN_PROD,
     )
     ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -183,8 +175,6 @@ def modal_get():  # noqa: C901
     async def verify_api_key(
         api_key_header: str = Security(APIKeyHeader(name="X-API-Key")),
     ) -> bool:
-        engine.dispose()
-        VOLUME_CONFIG[f"/{DB_VOLUME}"].reload()
         with get_db_session() as db_session:
             if db_session.exec(select(ApiKey).where(ApiKey.key == api_key_header)).first() is not None:
                 return True
@@ -360,6 +350,7 @@ def modal_get():  # noqa: C901
             db_session.add(k)
             db_session.commit()
             db_session.refresh(k)
+        VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
         return k.key
 
     return f_app
@@ -390,7 +381,6 @@ def main():
 
 
 # TODO
-# - move to postgres b/c of Modal volume limitations
 # - add multiple uploads/urls
 # - add user authentication:
 #   - save gens and keys to user account

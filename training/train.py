@@ -10,8 +10,7 @@ from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, RUNS_VOLUME, SECRETS, V
 # -----------------------------------------------------------------------------
 
 IMAGE = (
-    GPU_IMAGE.apt_install("git")
-    .run_commands(
+    GPU_IMAGE.run_commands(
         [
             "git clone --depth 1 https://github.com/hiyouga/LLaMA-Factory.git",
             "cd /LLaMA-Factory && pip install -e '.[torch,metrics]'",
@@ -22,13 +21,6 @@ IMAGE = (
     .copy_local_file("training/qwen2vl_full_sft.yaml", "/LLaMA-Factory/qwen2vl_full_sft.yaml")
     .pip_install(
         "deepspeed==0.15.4",
-        "ninja==1.11.1",  # required to build flash-attn
-        "packaging==23.1",  # required to build flash-attn
-        "wheel==0.41.2",  # required to build flash-attn
-        "torch==2.5.1",  # required to build flash-attn
-    )
-    .run_commands(  # add flash-attn
-        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
     )
     .env(
         {

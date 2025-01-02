@@ -44,6 +44,7 @@ uv run pre-commit install
 export PYTHONPATH=.
 echo "export PYTHONPATH=.:$PYTHONPATH" >> ~/.bashrc
 modal setup
+modal config set-environment dev
 ```
 
 Create a `.env` (+ `.env.dev` + `.env.local`):
@@ -98,13 +99,13 @@ modal run api/app.py
 Run the API "locally":
 
 ```bash
-modal serve --env=dev api/app.py
+modal serve api/app.py
 ```
 
 Deploy on dev:
 
 ```bash
-modal deploy --env=dev api/app.py
+modal deploy api/app.py
 ```
 
 Deploy on main:
@@ -118,7 +119,7 @@ modal deploy --env=main api/app.py
 Run the web app "locally":
 
 ```bash
-modal serve --env=dev frontend/app.py
+modal serve frontend/app.py
 stripe listen --forward-to <url>/webhook
 # update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
@@ -126,7 +127,7 @@ stripe listen --forward-to <url>/webhook
 Deploy on dev:
 
 ```bash
-modal deploy --env=dev frontend/app.py
+modal deploy frontend/app.py
 # update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
 
@@ -175,4 +176,10 @@ Run training:
 
 ```bash
 modal run training/train.py
+```
+
+Quantize the model:
+
+```bash
+modal run training/quantize.py
 ```
