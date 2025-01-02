@@ -466,21 +466,7 @@ def modal_get():  # noqa: C901
                     ),
                     fh.Div(
                         fh.P(
-                            obscured_key,
-                            onmouseover=(
-                                f"if (window.innerWidth >= 768) {{"
-                                f" this.innerText = '{k.key}'; "
-                                f"}} else {{"
-                                f" this.innerText = '{short_key}'; "
-                                f"}}"
-                            ),
-                            onmouseout=(
-                                f"if (window.innerWidth >= 768) {{"
-                                f" this.innerText = '{obscured_key}'; "
-                                f"}} else {{"
-                                f" this.innerText = '{short_key}'; "
-                                f"}}"
-                            ),
+                            short_key,
                             onclick=f"navigator.clipboard.writeText('{k.key}');",
                             hx_post="/toast?message=Copied to clipboard!&type=success",
                             hx_indicator="#spinner",
@@ -502,24 +488,6 @@ def modal_get():  # noqa: C901
                     cls="w-full flex justify-between items-center p-4",
                 ),
                 cls="flex grow",
-            ),
-            fh.Script(
-                f"""
-                function updateKeyDisplay() {{
-                    var element = document.getElementById('key-element-{k.id}');
-                    if (element) {{
-                        if (window.innerWidth >= 768) {{
-                            element.innerText = '{obscured_key}';
-                        }} else {{
-                            element.innerText = '{short_key}';
-                        }}
-                    }}
-                }}
-
-                window.onresize = updateKeyDisplay;
-                window.onload = updateKeyDisplay;
-                updateKeyDisplay();
-                """
             ),
         )
 
@@ -994,7 +962,7 @@ def modal_get():  # noqa: C901
     def generate_key_and_save(
         k: ApiKeyCreate,
     ) -> ApiKey:
-        k.key = secrets.token_hex(16)
+        k.key = secrets.token_hex(32)
         k = ApiKey.model_validate(k)
         with get_db_session() as db_session:
             db_session.add(k)
@@ -1013,7 +981,7 @@ def modal_get():  # noqa: C901
             global shown_generations
             if shown_generations.get(id) != curr_state:
                 shown_generations[id] = curr_state
-                yield f"""event: UpdateGen\ndata: {fh.to_xml(
+                yield f"""event: UpdateGens\ndata: {fh.to_xml(
                     fh.P(
                         "Scanning image ...",
                         sse_swap="UpdateGens",
@@ -1025,7 +993,7 @@ def modal_get():  # noqa: C901
                         hx_indicator="#spinner",
                         hx_target="#toast-container",
                         hx_swap="outerHTML",
-                        cls="text-green-300 hover:text-green-100 cursor-pointer max-w-full",
+                        cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
                         title="Click to copy",
                         sse_swap="UpdateGens",
                     ) if curr_state == "response" else
@@ -1038,9 +1006,10 @@ def modal_get():  # noqa: C901
 
     async def stream_balance_updates():
         while not shutdown_event.is_set():
+            curr_balance = get_curr_balance().balance
             global shown_balance
-            if shown_balance != get_curr_balance().balance:
-                shown_balance = get_curr_balance().balance
+            if shown_balance != curr_balance:
+                shown_balance = curr_balance
                 yield f"""event: UpdateBalance\ndata: {fh.to_xml(fh.P(f"{shown_balance} credits", cls="font-bold", sse_swap="UpdateBalance"))}\n\n"""
             await sleep(1)
 
@@ -1685,7 +1654,6 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - fix sse (o/w revert to polling)
 # - move to postgres b/c of Modal volume limitations
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add user authentication:

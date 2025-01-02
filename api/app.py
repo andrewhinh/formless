@@ -354,7 +354,7 @@ def modal_get():  # noqa: C901
 
     @f_app.post("/api-key")
     async def apikey() -> str:
-        k = ApiKeyCreate(key=secrets.token_hex(16), session_id=str(uuid4()))
+        k = ApiKeyCreate(key=secrets.token_hex(32), session_id=str(uuid4()))
         k = ApiKey.model_validate(k)
         with get_db_session() as db_session:
             db_session.add(k)
