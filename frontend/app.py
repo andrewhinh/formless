@@ -1685,8 +1685,8 @@ def modal_get():  # noqa: C901
 
 
 # TODO:
-# - fix gen sse (o/w revert to polling)
-# - move to postgres
+# - fix sse (o/w revert to polling)
+# - move to postgres b/c of Modal volume limitations
 # - add multiple file urls/uploads: https://docs.fastht.ml/tutorials/quickstart_for_web_devs.html#multiple-file-uploads
 # - add user authentication:
 #   - save gens and keys to user account

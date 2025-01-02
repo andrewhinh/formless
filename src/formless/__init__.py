@@ -18,11 +18,11 @@ API_URL = "https://andrewhinh--formless-api-modal-get.modal.run"
 app = typer.Typer(
     rich_markup_mode="rich",
 )
-state = {"verbose": False}
+state = {"image_url": DEFAULT_IMG_URL, "image_path": None, "verbose": 0}
 
 
-# Fns
-def run() -> None:
+# helper
+def call_api() -> None:
     image_url, image_path = state["image_url"], state["image_path"]
 
     response = requests.post(f"{API_URL}/api-key")
@@ -43,12 +43,13 @@ def run() -> None:
     return response.json()
 
 
+# CLI cmd
 @app.command(
     help="Handwritten + image OCR.",
     epilog="Made by [bold blue]Andrew Hinh.[/bold blue] :mechanical_arm::person_climbing:",
     context_settings={"allow_extra_args": False, "ignore_unknown_options": True},
 )
-def main(
+def scan(
     image_url: Annotated[
         str, typer.Option("--image-url", "-i", help="Image URL", rich_help_panel="Inputs")
     ] = DEFAULT_IMG_URL,
@@ -91,9 +92,9 @@ def main(
                 SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
             ) as progress:
                 progress.add_task(f"Generating response to request {request_id}", total=None)
-                generated_text = run()
+                generated_text = call_api()
         else:
-            generated_text = run()
+            generated_text = call_api()
         print(f"[bold green]{generated_text}[/bold green]")
 
         if state["verbose"]:
@@ -112,7 +113,6 @@ def main(
 
 
 # TODO:
-# - add python bindings
 # - add multiple uploads/urls
 # - add user authentication:
 #   - save gens and keys to user account

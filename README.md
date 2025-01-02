@@ -4,16 +4,32 @@ Hard handwriting understanding.
 
 ## Usage
 
-Hit the API:
+Use the web app:
 
 ```bash
-curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://andrewhinh--formless-api-model-infer.modal.run
+https://andrewhinh--formless-frontend-modal-get.modal.run/
+```
+
+Or hit the API:
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://andrewhinh--formless-api-modal-get.modal.run
 ```
 
 Or use the CLI:
 
 ```bash
 uv run formless -i <image-url> [-v]
+or
+uv run formless -p <local-image-path> [-v]
+```
+
+Or use in Python:
+
+```python
+from formless import scan
+scan(image_url="<image-url>", verbose=1)
+scan(image_path="<local-image-path>", verbose=1)
 ```
 
 ## Development

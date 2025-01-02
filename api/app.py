@@ -390,7 +390,7 @@ def main():
 
 
 # TODO
-# - move to postgres
+# - move to postgres b/c of Modal volume limitations
 # - add multiple uploads/urls
 # - add user authentication:
 #   - save gens and keys to user account

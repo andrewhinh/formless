@@ -1,6 +1,6 @@
 [project]
 name = "formless"
-version = "0.6.0"
+version = "0.7.0"
 description = "Handwritten + image OCR."
 readme = "README.md"
 requires-python = ">=3.12"
