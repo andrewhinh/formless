@@ -3,7 +3,6 @@
 import os
 
 import modal
-import yaml
 
 from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
 
@@ -19,6 +18,8 @@ IMAGE = (
     .copy_local_file("training/dataset_info.json", "/LLaMA-Factory/data/dataset_info.json")
     .copy_local_file("training/ds_z3_config.json", "/LLaMA-Factory/ds_z3_config.json")
     .copy_local_file("training/qwen2vl_full_sft.yaml", "/LLaMA-Factory/qwen2vl_full_sft.yaml")
+    .copy_local_file("training/qwen2vl_lora_dpo_train.yaml", "/LLaMA-Factory/qwen2vl_lora_dpo_train.yaml")
+    .copy_local_file("training/qwen2vl_lora_dpo_merge.yaml", "/LLaMA-Factory/qwen2vl_lora_dpo_merge.yaml")
     .pip_install(
         "deepspeed==0.15.4",
     )
@@ -48,6 +49,15 @@ with IMAGE.imports():
     from huggingface_hub import HfApi
     from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
+    def push_to_hub(local_dir: str, model_name: str):
+        model = Qwen2VLForConditionalGeneration.from_pretrained(local_dir)
+        processor = AutoProcessor.from_pretrained(local_dir)
+        api = HfApi()
+        user_info = api.whoami(token=os.getenv("HF_TOKEN"))
+        username = user_info["name"]
+        model.push_to_hub(username + "/" + model_name)
+        processor.push_to_hub(username + "/" + model_name)
+
 
 @app.function(
     image=IMAGE,
@@ -56,7 +66,7 @@ with IMAGE.imports():
     secrets=SECRETS,
     timeout=TRAIN_TIMEOUT,
 )
-def run():
+def run(sft: bool = True, dpo: bool = False):
     # run training
     os.chdir("/LLaMA-Factory")
     _exec_subprocess(
@@ -66,30 +76,38 @@ def run():
             "data/data.json",
         ]
     )
-    _exec_subprocess(
-        [
-            "llamafactory-cli",
-            "train",
-            "qwen2vl_full_sft.yaml",
-        ]
-    )
-
-    # hack to upload ckpt to hub
-    checkpoint_folder = max(
-        list((Path(f"/{RUNS_VOLUME}/qwen2-vl").glob("checkpoint-*"))),
-        key=lambda x: int(x.name.split("-")[-1]),
-    )
-    model = Qwen2VLForConditionalGeneration.from_pretrained(str(checkpoint_folder))
-    processor = AutoProcessor.from_pretrained(str(checkpoint_folder))
-    api = HfApi()
-    user_info = api.whoami(token=os.getenv("HF_TOKEN"))
-    username = user_info["name"]
-    with open("/LLaMA-Factory/qwen2vl_full_sft.yaml", "r") as f:
-        config = yaml.safe_load(f)
-        output_dir = config["output_dir"]
-    output_dir = output_dir.split("/")[-1]
-    model.push_to_hub(username + "/" + output_dir)
-    processor.push_to_hub(username + "/" + output_dir)
+    if sft:
+        _exec_subprocess(
+            [
+                "llamafactory-cli",
+                "train",
+                "qwen2vl_full_sft.yaml",
+            ]
+        )
+        checkpoint_folder = str(
+            max(
+                list((Path(f"/{RUNS_VOLUME}/qwen2-vl-7b-instruct-full-sft").glob("checkpoint-*"))),
+                key=lambda x: int(x.name.split("-")[-1]),
+            )
+        )
+        push_to_hub(checkpoint_folder, "qwen2-vl-7b-instruct-full-sft")
+    if dpo:
+        _exec_subprocess(
+            [
+                "llamafactory-cli",
+                "train",
+                "qwen2vl_lora_dpo_train.yaml",
+            ]
+        )
+        push_to_hub(f"/{RUNS_VOLUME}/qwen2-vl-7b-instruct-lora-dpo", "qwen2-vl-7b-instruct-lora-dpo")
+        _exec_subprocess(
+            [
+                "llamafactory-cli",
+                "export",
+                "qwen2vl_lora_dpo_merge.yaml",
+            ]
+        )
+        push_to_hub(f"/{RUNS_VOLUME}/qwen2-vl-7b-instruct-lora-dpo-merged", "qwen2-vl-7b-instruct-lora-dpo-merged")
 
     # TODO: use to create tokens and test model
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
@@ -155,12 +173,12 @@ def run():
 
 
 @app.local_entrypoint()
-def main():
-    run.remote()
+def main(sft: bool = True, dpo: bool = False):
+    run.remote(sft, dpo)
 
 
 # TODO:
-# - add dpo ft to see if it helps reduce loss < ~3.0: https://github.com/hiyouga/LLaMA-Factory/blob/main/examples/train_lora/qwen2vl_lora_dpo.yaml
+# - get better data
 # - recreate in pytorch and inc torchtitan
 # - replace slow act + fns with custom CUDA kernels
 #   - better yet: recreate in C/Cuda

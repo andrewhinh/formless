@@ -22,7 +22,7 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = "andrewhinh/qwen2-vl-7b-instruct-awq"  # pretrained model or ckpt
+MODEL = "andrewhinh/qwen2-vl-7b-instruct-full-sft-awq"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
 QUANTIZATION = "awq_marlin"  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"

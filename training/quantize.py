@@ -10,11 +10,11 @@ from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, RUNS_VOLUME, SECRETS, V
 # -----------------------------------------------------------------------------
 
 PROCESSOR = "Qwen/Qwen2-VL-7B-Instruct"
-MODEL = "andrewhinh/qwen2-vl-7b-instruct"  # pretrained model or ckpt
+MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-dpo-merged"  # pretrained model or ckpt
 CALIBRATION_DATA = f"/{DATA_VOLUME}/train/data.json"
 QUANT_CONFIG = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": "GEMM"}
-SAVE_PATH = f"{RUNS_VOLUME}/qwen2-vl-7b-instruct-awq"
-SAVE_HUB = "andrewhinh/qwen2-vl-7b-instruct-awq"
+SAVE_PATH = f"{RUNS_VOLUME}/qwen2-vl-7b-instruct-lora-dpo-merged-awq"
+SAVE_HUB = "andrewhinh/qwen2-vl-7b-instruct-lora-dpo-merged-awq"
 
 # -----------------------------------------------------------------------------
 

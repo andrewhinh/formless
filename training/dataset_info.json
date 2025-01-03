@@ -13,5 +13,16 @@
           "assistant_tag": "assistant",
           "system_tag": "system"
          }
+    },
+    "rlhf_v": {
+        "hf_hub_url": "llamafactory/RLHF-V",
+        "ranking": true,
+        "formatting": "sharegpt",
+        "columns": {
+          "messages": "conversations",
+          "chosen": "chosen",
+          "rejected": "rejected",
+          "images": "images"
+        }
     }
 }
