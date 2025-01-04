@@ -166,19 +166,43 @@ uv run --with formless --no-project -- formless -v
 
 ### Training
 
-Run ETL:
+Label subset of data (~1000 samples) to train topic & writing quality classifiers:
 
 ```bash
-modal run training/etl.py
+modal run training/etl.py --class
 ```
 
-Run training:
+Run classifier training:
 
 ```bash
-modal run training/train.py
+modal run training/train.py --class
 ```
 
-Quantize the model:
+Use trained classifiers to filter all data (down to ~10k samples) to train VLM using full SFT:
+
+```bash
+modal run training/etl.py --sft
+```
+
+Run SFT:
+
+```bash
+modal run training/train.py --sft
+```
+
+Run trained VLM on val data and collect/manually label worst examples (~50 samples):
+
+```bash
+modal run training/etl.py --dpo
+```
+
+Run DPO:
+
+```bash
+modal run training/train.py --dpo
+```
+
+Quantize the dpo model:
 
 ```bash
 modal run training/quantize.py
