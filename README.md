@@ -39,19 +39,38 @@ scan(image_path="<local-image-path>", verbose=1)
 Set up the environment:
 
 ```bash
+sudo apt install libpq-dev libcairo2-dev libjpeg-dev libgif-dev openjdk-11-jdk
 uv sync --all-extras --dev
 uv run pre-commit install
-export PYTHONPATH=.
-echo "export PYTHONPATH=.:$PYTHONPATH" >> ~/.bashrc
 modal setup
 modal config set-environment dev
+git clone git@github.com:Len-Stevens/Python-Antivirus.git frontend/Python-Antivirus
+echo "alias modal='uv run modal'" >> ~/.bashrc
+echo "export PYTHONPATH=.:$PYTHONPATH" >> ~/.bashrc
+echo "export TOKENIZERS_PARALLELISM=false" >> ~/.bashrc
+echo "export HUGGINGFACE_HUB_CACHE=\"~/.cache/huggingface/hub\"" >> ~/.bashrc
+echo "export HF_HUB_ENABLE_HF_TRANSFER=1" >> ~/.bashrc
+source ~/.bashrc
 ```
 
-Create a `.env` (+ `.env.dev` + `.env.local`):
+Create a `.env` (+ `.env.dev`):
 
 ```bash
-API_URL=
 HF_TOKEN=
+
+POSTGRES_URL=
+POSTGRES_PRISMA_URL=
+SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_URL=
+POSTGRES_URL_NON_POOLING=
+SUPABASE_JWT_SECRET=
+POSTGRES_USER=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+POSTGRES_PASSWORD=
+POSTGRES_DATABASE=
+SUPABASE_SERVICE_ROLE_KEY=
+POSTGRES_HOST=
+SUPABASE_ANON_KEY=
 
 LIVE=
 DEBUG=
@@ -59,9 +78,15 @@ STRIPE_PUBLISHABLE_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 DOMAIN=
+API_URL=
 
 WANDB_API_KEY=
 WANDB_ENTITY=
+
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_REGION=
+OPENAI_API_KEY=
 ```
 
 ### Useful Commands
@@ -72,7 +97,7 @@ Lint and format:
 uv run pre-commit run --all-files
 ```
 
-Pull latest db and migrate (do before running the frontend/api):
+Migrate db (do before running the frontend/api):
 
 ```bash
 make migrate env=<env> message=<message>
@@ -90,13 +115,19 @@ make migrate env=<env> message=<message>
 
 ### API
 
-Test the API:
+Test the API with an example input:
 
 ```bash
 modal run api/app.py
 ```
 
-Run the API "locally":
+Serve the API locally:
+
+```bash
+uv run api/app.py
+```
+
+Serve the API on Modal:
 
 ```bash
 modal serve api/app.py
@@ -116,7 +147,15 @@ modal deploy --env=main api/app.py
 
 ### Frontend
 
-Run the web app "locally":
+Serve the web app locally:
+
+```bash
+uv run frontend/app.py
+stripe listen --forward-to <url>/webhook
+# update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
+```
+
+Serve the web app on Modal:
 
 ```bash
 modal serve frontend/app.py
@@ -166,19 +205,19 @@ uv run --with formless --no-project -- formless -v
 
 ### Training
 
-Label subset of data (~1000 samples) to train topic & writing quality classifiers:
+Label subset of data (~1000 samples) to train writing quality classifier:
 
 ```bash
-modal run training/etl.py --class
+modal run training/etl.py --cls
 ```
 
 Run classifier training:
 
 ```bash
-modal run training/train.py --class
+modal run training/train.py --cls
 ```
 
-Use trained classifiers to filter all data (down to ~10k samples) to train VLM using full SFT:
+Use trained classifier to filter train/val/test data (down to ~10k samples) to train VLM using full SFT and eval:
 
 ```bash
 modal run training/etl.py --sft
@@ -190,7 +229,7 @@ Run SFT:
 modal run training/train.py --sft
 ```
 
-Run trained VLM on val data and collect/manually label worst examples (~50 samples):
+Run trained VLM on val data and collect/manually label worst examples (~50 samples) for DPO training:
 
 ```bash
 modal run training/etl.py --dpo
@@ -202,7 +241,7 @@ Run DPO:
 modal run training/train.py --dpo
 ```
 
-Quantize the dpo model:
+Quantize the DPO model:
 
 ```bash
 modal run training/quantize.py

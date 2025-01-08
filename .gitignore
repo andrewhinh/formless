@@ -203,6 +203,7 @@ cython_debug/
 
 # FastHTML
 .sesskey
+Python-Antivirus
 
 # DB
 *.db

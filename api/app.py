@@ -1,9 +1,29 @@
 import base64
 import os
+import secrets
+import subprocess
+import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import modal
+import requests
+import torch
+import uvicorn
+import validators
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Security, UploadFile
+from fastapi.security import APIKeyHeader
+from PIL import Image, ImageFile
+from pydantic import BaseModel
+from sqlmodel import Session as DBSession
+from sqlmodel import create_engine, select
+from term_image.image import from_file
+from vllm import LLM, SamplingParams
 
+from db.models import ApiKey, ApiKeyCreate
 from utils import (
     DB_VOLUME,
     DEFAULT_IMG_PATH,
@@ -41,10 +61,10 @@ STOP_TOKEN_IDS = []
 MAX_FILE_SIZE_MB = 5
 MAX_DIMENSIONS = (4096, 4096)
 
-# -----------------------------------------------------------------------------
+
+load_dotenv(".env" if IN_PROD else ".env.dev")
 
 
-# container build-time fns
 def download_model():
     from huggingface_hub import login, snapshot_download
 
@@ -64,74 +84,17 @@ def download_model():
             os.rename(f"{tok_path}/preprocessor_config.json", f"{MODEL}/preprocessor_config.json")
 
 
-# Modal
-IMAGE = (
-    GPU_IMAGE.pip_install(  # add Python dependencies
-        "term-image==0.7.2",
-        "fastapi==0.115.6",
-        "validators==0.34.0",
-        "sqlmodel==0.0.22",
-        "psycopg2-binary==2.9.10",
-    )
-    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
-    .run_function(
-        download_model,
-        secrets=SECRETS,
-        volumes=VOLUME_CONFIG,
-    )
-    .copy_local_dir(PARENT_PATH / "db", "/root/db")
-)
-API_TIMEOUT = 5 * MINUTES
-API_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
-API_ALLOW_CONCURRENT_INPUTS = 1000  # max
-
-GPU_TYPE = "l4"
-GPU_COUNT = 1
-GPU_SIZE = None  # options = None, "40GB", "80GB"
-GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
-if GPU_TYPE.lower() == "a100":
-    GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
-
-APP_NAME = f"{NAME}-api"
-app = modal.App(name=APP_NAME)
-
-# -----------------------------------------------------------------------------
-
-with IMAGE.imports():
-    import os
-    import secrets
-    import subprocess
-    import tempfile
-    import time
-    from contextlib import contextmanager
-    from uuid import uuid4
-
-    import requests
-    import validators
-    from fastapi import FastAPI, HTTPException, Security, UploadFile
-    from fastapi.security import APIKeyHeader
-    from PIL import Image, ImageFile
-    from pydantic import BaseModel
-    from sqlmodel import Session as DBSession
-    from sqlmodel import create_engine, select
-    from term_image.image import from_file
-    from vllm import LLM, SamplingParams
-
-    from db.models import ApiKey, ApiKeyCreate
+API_PATH = PARENT_PATH / "api"
+if modal.is_local():
+    GPU_COUNT = torch.cuda.device_count()
+    DB_VOL_PATH = str(API_PATH)
+    download_model()
+else:
+    GPU_COUNT = 1
+    DB_VOL_PATH = f"/{DB_VOLUME}"
 
 
-# Main API
-@app.function(
-    image=IMAGE,
-    gpu=GPU_CONFIG,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=API_TIMEOUT,
-    container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
-)
-@modal.asgi_app()
-def modal_get():  # noqa: C901
+def get_app():  # noqa: C901
     ## setup
     f_app = FastAPI()
     engine = create_engine(
@@ -139,7 +102,7 @@ def modal_get():  # noqa: C901
         echo=not IN_PROD,
     )
     ImageFile.LOAD_TRUNCATED_IMAGES = True
-    upload_dir = Path(f"/{DB_VOLUME}/uploads")
+    upload_dir = Path(f"{DB_VOL_PATH}/uploads")
     upload_dir.mkdir(exist_ok=True)
 
     @contextmanager
@@ -350,9 +313,62 @@ def modal_get():  # noqa: C901
             db_session.add(k)
             db_session.commit()
             db_session.refresh(k)
-        VOLUME_CONFIG[f"/{DB_VOLUME}"].commit()
+        VOLUME_CONFIG[DB_VOL_PATH].commit()
         return k.key
 
+    return f_app
+
+
+f_app = get_app()
+
+# -----------------------------------------------------------------------------
+
+
+# Modal
+IMAGE = (
+    GPU_IMAGE.pip_install(  # add Python dependencies
+        "term-image==0.7.2",
+        "fastapi==0.115.6",
+        "validators==0.34.0",
+        "sqlmodel==0.0.22",
+        "psycopg2-binary==2.9.10",
+    )
+    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
+    .run_function(
+        download_model,
+        secrets=SECRETS,
+        volumes=VOLUME_CONFIG,
+    )
+    .copy_local_dir(PARENT_PATH / "db", "/root/db")
+)
+API_TIMEOUT = 5 * MINUTES
+API_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
+API_ALLOW_CONCURRENT_INPUTS = 1000  # max
+
+GPU_TYPE = "l4"
+GPU_SIZE = None  # options = None, "40GB", "80GB"
+GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
+if GPU_TYPE.lower() == "a100":
+    GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
+
+APP_NAME = f"{NAME}-api"
+app = modal.App(name=APP_NAME)
+
+# -----------------------------------------------------------------------------
+
+
+# Main API
+@app.function(
+    image=IMAGE,
+    gpu=GPU_CONFIG,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=API_TIMEOUT,
+    container_idle_timeout=API_CONTAINER_IDLE_TIMEOUT,
+    allow_concurrent_inputs=API_ALLOW_CONCURRENT_INPUTS,
+)
+@modal.asgi_app()
+def modal_get():  # noqa: C901
     return f_app
 
 
@@ -379,6 +395,9 @@ def main():
     )
     assert response.ok, response.status_code
 
+
+if __name__ == "__main__":
+    uvicorn.run(f_app)
 
 # TODO
 # - add multiple uploads/urls

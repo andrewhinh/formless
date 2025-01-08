@@ -66,7 +66,7 @@ with IMAGE.imports():
     secrets=SECRETS,
     timeout=TRAIN_TIMEOUT,
 )
-def run(sft: bool = True, dpo: bool = False):
+def run(cls: bool, sft: bool, dpo: bool):
     # run training
     os.chdir("/LLaMA-Factory")
     _exec_subprocess(
@@ -173,8 +173,10 @@ def run(sft: bool = True, dpo: bool = False):
 
 
 @app.local_entrypoint()
-def main(sft: bool = True, dpo: bool = False):
-    run.remote(sft, dpo)
+def main(cls: bool = False, sft: bool = False, dpo: bool = False):
+    if not cls and not sft and not dpo:
+        raise ValueError("Must specify at least one of `cls`, `sft`, or `dpo`")
+    run.remote(cls, sft, dpo)
 
 
 # TODO:

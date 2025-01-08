@@ -1,10 +1,11 @@
-"""ETL for randomly selected samples to FT and eval Qwen2-VL."""
+"""ETL for data to train classifiers and VLMs."""
 
 import base64
 import json
 import math
 import os
 import random
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree
@@ -38,6 +39,8 @@ Determine the quality of the handwriting in the image using the additive 3-point
 
 Return the quality of the handwriting as a number between 1 and 3.
 """
+
+QUALITIES = ["1", "2", "3"]
 
 SPLITS = ["train"]
 RANDOM_SEED = 42
@@ -296,85 +299,120 @@ def analyze_ink(filename: Path) -> dict[Path, int, str]:
     secrets=SECRETS,
     timeout=ETL_TIMEOUT,
 )
-def run():
-    # collect metadata
-    df = spark.createDataFrame([], schema="img_path string, writing_quality int, label string, split string")
-    for split in SPLITS:
-        filenames = list(Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml"))
-        random.shuffle(filenames)
-        filenames = filenames[:N_SAMPLES]
-        split_stats = analyze_ink.map(filenames)
-        split_df = spark.createDataFrame(
-            [
-                Row(
-                    img_path=str(stat["img_path"]),
-                    writing_quality=stat["writing_quality"],
-                    label=stat["label"],
-                    split=split,
-                )
-                for stat in split_stats
-            ],
-            schema=df.schema,
-        )
-        new_entries = split_df.join(df, on=["img_path", "split"], how="left_anti")
-        df = df.unionByName(new_entries)
-        print(f"Collected {split_df.count()} samples for split {split}")
-
-    # filter to only get data with writing quality == 1
-    filtered_dfs = []
-    for split in SPLITS:
-        split_df = df.filter(col("split") == split)
-        split_filter_df = split_df.filter(split_df.writing_quality == 1)
-        filtered_dfs.append(split_filter_df)
-        print(f"Found {split_filter_df.count()} samples with writing quality == 1 for split {split}")
-    filter_df = filtered_dfs[0]
-    for filtered_df in filtered_dfs[1:]:
-        filter_df = filter_df.unionByName(filtered_df)
-    df = filter_df
-
-    # deduplication
-    dedup_dfs = []
-    for split in SPLITS:
-        split_df = df.filter(col("split") == split)
-        split_dedup_df = dedup_per_split(split_df)
-        dedup_dfs.append(split_dedup_df)
-        print(f"Found {split_dedup_df.count()} deduplicated samples for split {split}")
-    final_dedup_df = dedup_dfs[0]
-    for dedup_df in dedup_dfs[1:]:
-        final_dedup_df = final_dedup_df.unionByName(dedup_df)
-    df = final_dedup_df
-
-    # write to json
-    for split in SPLITS:
-        output_path = Path(f"/{DATA_VOLUME}/{split}/data.json")
-        split_df = df.filter(col("split") == split)
-        json_output = []
-        for row in split_df.collect():
-            json_entry = {
-                "messages": [
-                    {
-                        "content": DEFAULT_SYSTEM_PROMPT,
-                        "role": "system",
-                    },
-                    {
-                        "content": f"<image>{DEFAULT_QUESTION}",
-                        "role": "user",
-                    },
-                    {
-                        "content": row.label,
-                        "role": "assistant",
-                    },
+def run(cls: bool, sft: bool, dpo: bool):  # noqa: C901
+    if cls:
+        # run pretrained vlm to assign writing quality to random subset
+        df = spark.createDataFrame([], schema="img_path string, writing_quality int, label string, split string")
+        for split in SPLITS:
+            filenames = list(Path(f"/{DATA_VOLUME}/{split}").glob("*.inkml"))
+            random.shuffle(filenames)
+            filenames = filenames[:N_SAMPLES]
+            # split_stats = analyze_ink.map(filenames)
+            split_stats = [analyze_ink.local(filename) for filename in filenames]
+            split_df = spark.createDataFrame(
+                [
+                    Row(
+                        img_path=str(stat["img_path"]),
+                        writing_quality=stat["writing_quality"],
+                        label=stat["label"],
+                        split=split,
+                    )
+                    for stat in split_stats
                 ],
-                "images": [
-                    row.img_path,
-                ],
-            }
-            json_output.append(json_entry)
-        with open(output_path, "w") as f:
-            json.dump(json_output, f, indent=4)
-        print(f"Deduplicated data written to {output_path}")
+                schema=df.schema,
+            )
+            new_entries = split_df.join(df, on=["img_path", "split"], how="left_anti")
+            df = df.unionByName(new_entries)
+            print(f"Collected {split_df.count()} samples for split {split}")
+
+        # save df for later use
+        df.write.mode("overwrite").parquet(f"/{DATA_VOLUME}/data.parquet")
+
+        # save img paths to folders: f"/{DATA_VOLUME}/cls/{split}/{writing_quality}/
+        for split in SPLITS:
+            for quality in QUALITIES:
+                quality_df = df.filter(col("split") == split).filter(col("writing_quality") == quality)
+                quality_path = Path(f"/{DATA_VOLUME}/cls/{split}/{quality}")
+                if not quality_path.exists():
+                    quality_path.mkdir(parents=True)
+                for row in quality_df.collect():
+                    shutil.copy(row.img_path, quality_path)
+
+    if sft:
+        # load df
+        df = spark.read.parquet(f"/{DATA_VOLUME}/data.parquet")
+
+        # run trained classifier on df
+
+        # filter to only get data with writing quality == 1
+        filtered_dfs = []
+        for split in SPLITS:
+            split_df = df.filter(col("split") == split)
+            split_filter_df = split_df.filter(split_df.writing_quality == 1)
+            filtered_dfs.append(split_filter_df)
+            print(f"Found {split_filter_df.count()} samples with writing quality == 1 for split {split}")
+        filter_df = filtered_dfs[0]
+        for filtered_df in filtered_dfs[1:]:
+            filter_df = filter_df.unionByName(filtered_df)
+        df = filter_df
+
+        # deduplication
+        dedup_dfs = []
+        for split in SPLITS:
+            split_df = df.filter(col("split") == split)
+            split_dedup_df = dedup_per_split(split_df)
+            dedup_dfs.append(split_dedup_df)
+            print(f"Found {split_dedup_df.count()} deduplicated samples for split {split}")
+        final_dedup_df = dedup_dfs[0]
+        for dedup_df in dedup_dfs[1:]:
+            final_dedup_df = final_dedup_df.unionByName(dedup_df)
+        df = final_dedup_df
+
+        # write to json
+        for split in SPLITS:
+            output_path = Path(f"/{DATA_VOLUME}/{split}/data.json")
+            split_df = df.filter(col("split") == split)
+            json_output = []
+            for row in split_df.collect():
+                json_entry = {
+                    "messages": [
+                        {
+                            "content": DEFAULT_SYSTEM_PROMPT,
+                            "role": "system",
+                        },
+                        {
+                            "content": f"<image>{DEFAULT_QUESTION}",
+                            "role": "user",
+                        },
+                        {
+                            "content": row.label,
+                            "role": "assistant",
+                        },
+                    ],
+                    "images": [
+                        row.img_path,
+                    ],
+                }
+                json_output.append(json_entry)
+            with open(output_path, "w") as f:
+                json.dump(json_output, f, indent=4)
+            print(f"Deduplicated data written to {output_path}")
+
+    if dpo:
+        # load df
+
+        # run trained VLM on val data
+
+        # identify subset of val samples with worst perf
+
+        # prompt user to manually label data
+
+        # write to json
+        pass
 
 
 @app.local_entrypoint()
-def main():
-    run.remote()
+def main(cls: bool = False, sft: bool = False, dpo: bool = False):
+    if not cls and not sft and not dpo:
+        raise ValueError("Must specify at least one of `cls`, `sft`, or `dpo`")
+    run.local(cls, sft, dpo)
