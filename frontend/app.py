@@ -47,7 +47,10 @@ from utils import (
 # -----------------------------------------------------------------------------
 
 FE_PATH = PARENT_PATH / "frontend"
-DB_VOL_PATH = str(FE_PATH) if modal.is_local() else f"/{DB_VOLUME}"
+DB_VOL_PATH = str(FE_PATH / "db") if modal.is_local() else f"/{DB_VOLUME}"
+if modal.is_local():
+    if not os.path.exists(DB_VOL_PATH):
+        os.mkdir(DB_VOL_PATH)
 
 
 def get_app():  # noqa: C901
@@ -203,7 +206,8 @@ def get_app():  # noqa: C901
         session,
     ):
         ### check if g is valid
-        VOLUME_CONFIG[f"{DB_VOL_PATH}"].reload()
+        if not modal.is_local():
+            VOLUME_CONFIG[f"{DB_VOL_PATH}"].reload()
         with get_db_session() as db_session:
             if db_session.get(Gen, g.id) is None:
                 fh.add_toast(session, "Please refresh the page", "error")
@@ -889,7 +893,6 @@ def get_app():  # noqa: C901
         #     db_session.add(g)
         #     db_session.commit()
         #     db_session.refresh(g)
-        #     VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         #     return
 
         # TODO: uncomment for debugging
@@ -898,7 +901,6 @@ def get_app():  # noqa: C901
         #     db_session.add(g)
         #     db_session.commit()
         #     db_session.refresh(g)
-        #     VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         #     return
 
         if g.image_url:
@@ -925,7 +927,6 @@ def get_app():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
 
     def generate_key_and_save(
         k: ApiKeyCreate,
@@ -936,7 +937,6 @@ def get_app():  # noqa: C901
             db_session.add(k)
             db_session.commit()
             db_session.refresh(k)
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         return k
 
     ## SSE helpers
@@ -1202,7 +1202,6 @@ def get_app():  # noqa: C901
             db_session.add(curr_balance)
             db_session.commit()
             db_session.refresh(curr_balance)
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
 
         # Clear input
         clear_img_input = fh.Input(
@@ -1220,7 +1219,6 @@ def get_app():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         global shown_generations
         shown_generations[g.id] = "loading"
         generate_and_save(g, session)
@@ -1262,7 +1260,6 @@ def get_app():  # noqa: C901
             db_session.add(curr_balance)
             db_session.commit()
             db_session.refresh(curr_balance)
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
 
         # Clear input
         clear_img_input = fh.Input(
@@ -1280,7 +1277,6 @@ def get_app():  # noqa: C901
             db_session.add(g)
             db_session.commit()
             db_session.refresh(g)
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         global shown_generations
         shown_generations[g.id] = "loading"
         generate_and_save(g, session)
@@ -1337,7 +1333,8 @@ def get_app():  # noqa: C901
             with get_db_session() as db_session:
                 db_session.delete(g)
                 db_session.commit()
-                VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
+                if not modal.is_local():
+                    VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
             shown_generations.pop(g.id, None)
         fh.add_toast(session, "Deleted generations.", "success")
         return (
@@ -1363,7 +1360,6 @@ def get_app():  # noqa: C901
             with get_db_session() as db_session:
                 db_session.delete(k)
                 db_session.commit()
-                VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
             shown_keys = [key for key in shown_keys if key != k.id]
         fh.add_toast(session, "Deleted keys.", "success")
         return (
@@ -1392,7 +1388,8 @@ def get_app():  # noqa: C901
                         os.remove(g.image_file)
                     db_session.delete(g)
                     db_session.commit()
-                    VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
+                    if not modal.is_local():
+                        VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
                     shown_generations.pop(g.id, None)
             fh.add_toast(session, "Deleted generations.", "success")
             gens_present = bool(get_curr_gens(session["session_id"], number=1))
@@ -1425,7 +1422,6 @@ def get_app():  # noqa: C901
                 for k in select_keys:
                     db_session.delete(k)
                     db_session.commit()
-                    VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
                     shown_keys = [key for key in shown_keys if key != k.id]
             fh.add_toast(session, "Deleted keys.", "success")
             keys_present = bool(get_curr_keys(session["session_id"], number=1))
@@ -1468,7 +1464,8 @@ def get_app():  # noqa: C901
                 os.remove(gen.image_file)
             db_session.delete(gen)
             db_session.commit()
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
+            if not modal.is_local():
+                VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         global shown_generations
         shown_generations.pop(gen_id, None)
         fh.add_toast(session, "Deleted generation.", "success")
@@ -1497,7 +1494,6 @@ def get_app():  # noqa: C901
             key = db_session.get(ApiKey, key_id)
             db_session.delete(key)
             db_session.commit()
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         global shown_keys
         shown_keys = [key for key in shown_keys if key != key_id]
         fh.add_toast(session, "Deleted key.", "success")
@@ -1627,7 +1623,6 @@ def get_app():  # noqa: C901
                 db_session.add(curr_balance)
                 db_session.commit()
                 db_session.refresh(curr_balance)
-                VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
             return {"status": "success"}, 200
 
     return f_app
