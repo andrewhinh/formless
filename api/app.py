@@ -84,10 +84,11 @@ def download_model():
             os.rename(f"{tok_path}/preprocessor_config.json", f"{MODEL}/preprocessor_config.json")
 
 
-API_PATH = PARENT_PATH / "api"
 if modal.is_local():
     GPU_COUNT = torch.cuda.device_count()
-    DB_VOL_PATH = str(API_PATH)
+    DB_VOL_PATH = str(PARENT_PATH / "local_db")
+    if not os.path.exists(DB_VOL_PATH):
+        os.mkdir(DB_VOL_PATH)
     download_model()
 else:
     GPU_COUNT = 1
@@ -104,6 +105,7 @@ def get_app():  # noqa: C901
     ImageFile.LOAD_TRUNCATED_IMAGES = True
     upload_dir = Path(f"{DB_VOL_PATH}/uploads")
     upload_dir.mkdir(exist_ok=True)
+    os.chmod(upload_dir, 0o777)  # noqa: S103
 
     @contextmanager
     def get_db_session():
@@ -313,13 +315,10 @@ def get_app():  # noqa: C901
             db_session.add(k)
             db_session.commit()
             db_session.refresh(k)
-        VOLUME_CONFIG[DB_VOL_PATH].commit()
         return k.key
 
     return f_app
 
-
-f_app = get_app()
 
 # -----------------------------------------------------------------------------
 
@@ -369,7 +368,7 @@ app = modal.App(name=APP_NAME)
 )
 @modal.asgi_app()
 def modal_get():  # noqa: C901
-    return f_app
+    return get_app()
 
 
 ## For testing
@@ -397,7 +396,7 @@ def main():
 
 
 if __name__ == "__main__":
-    uvicorn.run(f_app)
+    uvicorn.run(get_app(), reload=True)
 
 # TODO
 # - add multiple uploads/urls

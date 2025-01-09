@@ -47,7 +47,7 @@ from utils import (
 # -----------------------------------------------------------------------------
 
 FE_PATH = PARENT_PATH / "frontend"
-DB_VOL_PATH = str(FE_PATH / "db") if modal.is_local() else f"/{DB_VOLUME}"
+DB_VOL_PATH = str(PARENT_PATH / "local_db") if modal.is_local() else f"/{DB_VOLUME}"
 if modal.is_local():
     if not os.path.exists(DB_VOL_PATH):
         os.mkdir(DB_VOL_PATH)
