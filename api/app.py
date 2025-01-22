@@ -89,6 +89,7 @@ if modal.is_local():
     DB_VOL_PATH = str(PARENT_PATH / "local_db")
     if not os.path.exists(DB_VOL_PATH):
         os.mkdir(DB_VOL_PATH)
+        os.chmod(DB_VOL_PATH, 0o777)  # noqa: S103
     download_model()
 else:
     GPU_COUNT = 1
@@ -105,7 +106,6 @@ def get_app():  # noqa: C901
     ImageFile.LOAD_TRUNCATED_IMAGES = True
     upload_dir = Path(f"{DB_VOL_PATH}/uploads")
     upload_dir.mkdir(exist_ok=True)
-    os.chmod(upload_dir, 0o777)  # noqa: S103
 
     @contextmanager
     def get_db_session():

@@ -12,7 +12,7 @@ from typing_extensions import Annotated
 
 
 DEFAULT_IMG_URL = "https://formless-data.s3.us-west-1.amazonaws.com/train/00001d1472a8709f.png"
-API_URL = "https://andrewhinh--formless-api-modal-get.modal.run"
+API_URL = "https://bit.ly/formless-api"
 
 # Typer CLI
 app = typer.Typer(

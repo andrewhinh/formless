@@ -7,13 +7,13 @@ Hard handwriting understanding.
 Use the web app:
 
 ```bash
-https://andrewhinh--formless-frontend-modal-get.modal.run/
+https://bit.ly/formless-fe
 ```
 
 Or hit the API:
 
 ```bash
-curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://andrewhinh--formless-api-modal-get.modal.run
+curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://bit.ly/formless-api
 ```
 
 Or use the CLI:
@@ -39,17 +39,7 @@ scan(image_path="<local-image-path>", verbose=1)
 Set up the environment:
 
 ```bash
-sudo apt install libpq-dev libcairo2-dev libjpeg-dev libgif-dev openjdk-11-jdk
-uv sync --all-extras --dev
-uv run pre-commit install
-modal setup
-modal config set-environment dev
-git clone git@github.com:Len-Stevens/Python-Antivirus.git frontend/Python-Antivirus
-echo "alias modal='uv run modal'" >> ~/.bashrc
-echo "export PYTHONPATH=.:$PYTHONPATH" >> ~/.bashrc
-echo "export TOKENIZERS_PARALLELISM=false" >> ~/.bashrc
-echo "export HF_HUB_ENABLE_HF_TRANSFER=1" >> ~/.bashrc
-source ~/.bashrc
+make setup
 ```
 
 Create a `.env` (+ `.env.dev`):
@@ -90,16 +80,10 @@ OPENAI_API_KEY=
 
 ### Useful Commands
 
-Lint and format:
-
-```bash
-uv run pre-commit run --all-files
-```
-
 Migrate db (do before running the frontend/api):
 
 ```bash
-make migrate env=<env> message=<message>
+make migrate ENV=<env> MSG=<message>
 ```
 
 ### Repository Structure
@@ -204,10 +188,28 @@ uv run --with formless --no-project -- formless -v
 
 ### Training
 
+Download data:
+
+```bash
+make data
+```
+
+Upload to S3 (if using Modal):
+
+```bash
+make sync
+```
+
 Label subset of data (~1000 samples) to train writing quality classifier:
 
 ```bash
 modal run training/etl.py --cls
+```
+
+or:
+
+```bash
+uv run training/etl.py --cls
 ```
 
 Run classifier training:

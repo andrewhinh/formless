@@ -51,6 +51,7 @@ DB_VOL_PATH = str(PARENT_PATH / "local_db") if modal.is_local() else f"/{DB_VOLU
 if modal.is_local():
     if not os.path.exists(DB_VOL_PATH):
         os.mkdir(DB_VOL_PATH)
+        os.chmod(DB_VOL_PATH, 0o777)  # noqa: S103
 
 
 def get_app():  # noqa: C901
@@ -126,7 +127,6 @@ def get_app():  # noqa: C901
     ## db
     upload_dir = Path(f"{DB_VOL_PATH}/uploads")
     upload_dir.mkdir(exist_ok=True)
-    os.chmod(upload_dir, 0o600)  # Read/write by owner only
 
     engine = create_engine(
         url=os.getenv("POSTGRES_URL"),
