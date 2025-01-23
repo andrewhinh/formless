@@ -48,9 +48,9 @@ RANDOM_SEED = 42
 SPLITS = ["train", "valid", "test"]
 N_SAMPLES_PER_SPLIT = 250
 QUALITIES = ["1", "2", "3"]
-THRESHOLD = 0.5
-NUM_PERM = 64
-HASH_SZ = 8
+THRESHOLD = 0.5  # larger = less duplicates
+NUM_PERM = 64  # larger = high acc but high mem usage
+HASH_SZ = 8  # larger = more accurate but slower
 
 MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained tokenizer
@@ -77,15 +77,24 @@ Return the quality of the handwriting as a number between 1 and 3.
 # -----------------------------------------------------------------------------
 
 # setup
+
 spark = (
-    SparkSession.builder.config("spark.executor.memory", "20G")
-    .config("spark.driver.memory", "20G")
-    .config("spark.driver.maxResultSize", "10G")
-    .config("spark.sql.shuffle.partitions", 300)
-    .config("spark.worker.cleanup.enabled", "True")
+    SparkSession.builder.config("spark.executor.memory", "4G")
+    .config("spark.driver.memory", "4G")
+    .config("spark.driver.maxResultSize", "1G")
+    .config("spark.sql.shuffle.partitions", "200")
+    .config("spark.worker.cleanup.enabled", "true")
+    .config("spark.worker.cleanup.interval", "1800")
+    .config("spark.worker.cleanup.appDataTtl", "86400")
     .config("spark.local.dir", "/tmp/spark-temp")  # noqa: S108
+    .config("spark.dynamicAllocation.enabled", "true")
+    .config("spark.dynamicAllocation.minExecutors", "1")
+    .config("spark.dynamicAllocation.maxExecutors", "10")
+    .config("spark.sql.adaptive.enabled", "true")
+    .config("spark.sql.parquet.compression.codec", "snappy")
     .getOrCreate()
 )
+
 random.seed(RANDOM_SEED)
 load_dotenv(".env" if IN_PROD else ".env.dev")
 
@@ -110,7 +119,9 @@ def download_model():
             os.rename(f"{tok_path}/preprocessor_config.json", f"{MODEL}/preprocessor_config.json")
 
 
-## Modal
+# -----------------------------------------------------------------------------
+
+# Modal
 IMAGE = (
     GPU_IMAGE.apt_install(
         [
@@ -281,8 +292,9 @@ def dedup_per_split(split_df: DataFrame) -> DataFrame:
     -------
         DataFrame: new DataFrame with duplicates removed.
     """
-    split_df = split_df.withColumn("phash", udf(compute_phash, StringType())(col("img_path")))
-    split_df = split_df.withColumn("minhash", udf(compute_minhash, ArrayType(IntegerType()))(col("phash")))
+    split_df = split_df.withColumn("phash", udf(compute_phash, StringType())(col("img_path"))).withColumn(
+        "minhash", udf(compute_minhash, ArrayType(IntegerType()))(col("phash"))
+    )
     lsh = MinHashLSH(threshold=THRESHOLD, num_perm=NUM_PERM)
 
     def is_duplicate(row):
@@ -294,7 +306,7 @@ def dedup_per_split(split_df: DataFrame) -> DataFrame:
         return True
 
     unique_rows = split_df.rdd.filter(lambda row: not is_duplicate(row.asDict())).collect()
-    deduped_df = spark.createDataFrame(unique_rows, schema=split_df.schema)
+    deduped_df = spark.createDataFrame(unique_rows, schema=split_df.schema).drop("phash", "minhash")
 
     return deduped_df
 
@@ -437,7 +449,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             )
             split_cts[split] = split_df.count()
             new_entries = split_df.join(df, on=["img_path", "split"], how="left_anti")
-            df = df.unionByName(new_entries)
+            df = df.unionByName(new_entries.select(df.columns))
             print(f"Collected {split_cts[split]} samples for split {split}")
 
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
@@ -500,7 +512,11 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 ]
             )
             split_df = split_df.join(writing_qualities_df, on="img_path", how="left")
-            df = df.filter(col("split") != split).unionByName(split_df)
+            df = (
+                df.filter(col("split") != split)
+                .select(*[c for c in df.columns if c != "writing_quality"])  # Avoid duplicate column
+                .unionByName(split_df)
+            )
 
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
     if sft:
