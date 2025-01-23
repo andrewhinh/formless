@@ -79,10 +79,10 @@ Return the quality of the handwriting as a number between 1 and 3.
 # setup
 
 spark = (
-    SparkSession.builder.config("spark.executor.memory", "4G")
-    .config("spark.driver.memory", "4G")
+    SparkSession.builder.config("spark.executor.memory", "20G")
+    .config("spark.driver.memory", "20G")
     .config("spark.driver.maxResultSize", "1G")
-    .config("spark.sql.shuffle.partitions", "200")
+    .config("spark.sql.shuffle.partitions", "300")
     .config("spark.worker.cleanup.enabled", "true")
     .config("spark.worker.cleanup.interval", "1800")
     .config("spark.worker.cleanup.appDataTtl", "86400")
@@ -375,8 +375,32 @@ def analyze_ink(img_path: Path) -> int:
     ]
     if img_url is not None:
         messages[1]["content"].append({"type": "image_url", "image_url": {"url": img_url}})
+
     global llm
     global sampling_params
+    # load pretrained vlm if not already loaded
+    if llm is None:
+        llm = LLM(
+            model=MODEL,
+            enforce_eager=ENFORCE_EAGER,
+            max_num_seqs=MAX_NUM_SEQS,
+            tensor_parallel_size=GPU_COUNT,
+            trust_remote_code=True,
+            mm_processor_kwargs={
+                "min_pixels": MIN_PIXELS,
+                "max_pixels": MAX_PIXELS,
+            },
+            **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
+        )
+    if sampling_params is None:
+        sampling_params = SamplingParams(
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            repetition_penalty=REPEATION_PENALTY,
+            max_tokens=MAX_TOKENS,
+            stop_token_ids=STOP_TOKEN_IDS,
+            guided_decoding=GuidedDecodingParams(choice=[1, 2, 3]),
+        )
     outputs = llm.chat(messages, sampling_params)
     generated_text = outputs[0].outputs[0].text.strip()
     writing_quality = int(generated_text)
@@ -455,30 +479,6 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
 
     if cls:
-        # load pretrained vlm
-        global llm
-        global sampling_params
-        llm = LLM(
-            model=MODEL,
-            enforce_eager=ENFORCE_EAGER,
-            max_num_seqs=MAX_NUM_SEQS,
-            tensor_parallel_size=GPU_COUNT,
-            trust_remote_code=True,
-            mm_processor_kwargs={
-                "min_pixels": MIN_PIXELS,
-                "max_pixels": MAX_PIXELS,
-            },
-            **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
-        )
-        sampling_params = SamplingParams(
-            temperature=TEMPERATURE,
-            top_p=TOP_P,
-            repetition_penalty=REPEATION_PENALTY,
-            max_tokens=MAX_TOKENS,
-            stop_token_ids=STOP_TOKEN_IDS,
-            guided_decoding=GuidedDecodingParams(choice=[1, 2, 3]),
-        )
-
         # run model to assign writing quality to random subset
         for split in SPLITS:
             ## get random subset of split data
@@ -487,17 +487,9 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
             img_paths = [row.img_path for row in split_filter_df.select("img_path").collect()]
             if modal.is_local():
-                writing_qualities = list(
-                    tqdm(
-                        thread_map(
-                            analyze_ink.local,
-                            img_paths,
-                            max_workers=multiprocessing.cpu_count(),
-                        ),
-                        desc=split,
-                        total=len(img_paths),
-                    )
-                )
+                writing_qualities = [
+                    analyze_ink.local(img_path) for img_path in tqdm(img_paths, desc=split, total=len(img_paths))
+                ]
             else:
                 writing_qualities = analyze_ink.map(img_paths)
 
@@ -591,7 +583,6 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
 @app.function(
     image=IMAGE,
-    gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=ETL_TIMEOUT,
