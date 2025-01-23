@@ -379,7 +379,7 @@ def analyze_ink(img_path: Path) -> int:
     global llm
     global sampling_params
     # load pretrained vlm if not already loaded
-    if llm is None:
+    if "llm" not in globals():
         llm = LLM(
             model=MODEL,
             enforce_eager=ENFORCE_EAGER,
@@ -392,7 +392,7 @@ def analyze_ink(img_path: Path) -> int:
             },
             **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
         )
-    if sampling_params is None:
+    if "sampling_params" not in globals():
         sampling_params = SamplingParams(
             temperature=TEMPERATURE,
             top_p=TOP_P,
