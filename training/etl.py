@@ -46,7 +46,11 @@ from utils import (
 
 RANDOM_SEED = 42
 SPLITS = ["train", "valid", "test"]
-N_SAMPLES_PER_SPLIT = 250
+N_SAMPLES_PER_SPLIT_CLS = {
+    "train": 1000,
+    "valid": 100,
+    "test": 100,
+}
 QUALITIES = ["1", "2", "3"]
 THRESHOLD = 0.5  # larger = less duplicates
 NUM_PERM = 64  # larger = high acc but high mem usage
@@ -73,6 +77,14 @@ Determine the quality of the handwriting in the image using the additive 3-point
 3) Add a third point if the writing is completely clear and legible.
 Return the quality of the handwriting as a number between 1 and 3.
 """
+
+# -----------------------------------------------------------------------------
+
+N_SAMPLES_PER_SPLIT_SFT = {
+    "train": 10000,
+    "valid": 1000,
+    "test": 1000,
+}
 
 # -----------------------------------------------------------------------------
 
@@ -491,7 +503,9 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         for split in SPLITS:
             ## get random subset of split data
             split_df = df.filter(col("split") == split)
-            split_filter_df = split_df.sample(False, N_SAMPLES_PER_SPLIT / split_cts[split], float(RANDOM_SEED))
+            split_filter_df = split_df.sample(
+                False, N_SAMPLES_PER_SPLIT_CLS[split] / split_cts[split], float(RANDOM_SEED)
+            )
 
             img_paths = [Path(row.img_path) for row in split_filter_df.select("img_path").collect()]
             if modal.is_local():
@@ -503,7 +517,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
             ## write to df
             new_schema = ["img_path", "split", "writing_quality"]
-            data_for_split = [(p, split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
+            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
             updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
             all_updates.append(updates_df)
 
@@ -532,7 +546,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         for split in SPLITS:
             split_df = df.filter(col("split") == split)
             split_filter_df = split_df.filter(split_df.writing_quality == 1)
-            split_filter_df = split_filter_df.sample(False, N_SAMPLES_PER_SPLIT)
+            split_filter_df = split_filter_df.sample(False, N_SAMPLES_PER_SPLIT_SFT[split], float(RANDOM_SEED))
             filtered_dfs.append(split_filter_df)
             print(f"Found {split_filter_df.count()} samples with writing quality == 1 for split {split}")
         filter_df = filtered_dfs[0]
