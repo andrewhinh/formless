@@ -20,7 +20,7 @@ from imagehash import phash
 from PIL import Image
 from pydantic import Field
 from pyspark.sql import DataFrame, Row, SparkSession
-from pyspark.sql.functions import col, udf
+from pyspark.sql.functions import coalesce, col, lit, udf
 from pyspark.sql.types import ArrayType, IntegerType, StringType
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
@@ -52,8 +52,8 @@ THRESHOLD = 0.5  # larger = less duplicates
 NUM_PERM = 64  # larger = high acc but high mem usage
 HASH_SZ = 8  # larger = more accurate but slower
 
-MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained model or ckpt
-TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained tokenizer
+MODEL = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained model or ckpt
+TOKENIZER = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained tokenizer
 QUANTIZATION = "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
 ENFORCE_EAGER = False
@@ -404,6 +404,11 @@ def analyze_ink(img_path: Path) -> int:
     outputs = llm.chat(messages, sampling_params)
     generated_text = outputs[0].outputs[0].text.strip()
     writing_quality = int(generated_text)
+
+    img = Image.open(img_path).convert("RGB")
+    if not os.path.exists(img_path.parent / str(writing_quality)):
+        os.mkdir(img_path.parent / str(writing_quality))
+    img.save(img_path.parent / str(writing_quality) / img_path.name)
     return writing_quality
 
 
@@ -480,12 +485,15 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
     if cls:
         # run model to assign writing quality to random subset
+        df = df.withColumn("writing_quality", lit(None).cast(IntegerType()))
+        all_updates = []
+
         for split in SPLITS:
             ## get random subset of split data
             split_df = df.filter(col("split") == split)
             split_filter_df = split_df.sample(False, N_SAMPLES_PER_SPLIT / split_cts[split], float(RANDOM_SEED))
 
-            img_paths = [row.img_path for row in split_filter_df.select("img_path").collect()]
+            img_paths = [Path(row.img_path) for row in split_filter_df.select("img_path").collect()]
             if modal.is_local():
                 writing_qualities = [
                     analyze_ink.local(img_path) for img_path in tqdm(img_paths, desc=split, total=len(img_paths))
@@ -494,21 +502,26 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 writing_qualities = analyze_ink.map(img_paths)
 
             ## write to df
-            writing_qualities_df = spark.createDataFrame(
-                [
-                    Row(
-                        img_path=img_path,
-                        writing_quality=quality,
-                    )
-                    for img_path, quality in zip(img_paths, writing_qualities, strict=True)
-                ]
+            new_schema = ["img_path", "split", "writing_quality"]
+            data_for_split = [(p, split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
+            updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
+            all_updates.append(updates_df)
+
+        final_updates_df = all_updates[0]
+        for udf in all_updates[1:]:
+            final_updates_df = final_updates_df.unionByName(udf)
+
+        df = (
+            df.alias("main")
+            .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
+            .select(
+                col("main.img_path"),
+                col("main.label"),
+                col("main.split"),
+                # If main already had writing_quality, we merge it; otherwise just pick upd
+                coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
             )
-            split_df = split_df.join(writing_qualities_df, on="img_path", how="left")
-            df = (
-                df.filter(col("split") != split)
-                .select(*[c for c in df.columns if c != "writing_quality"])  # Avoid duplicate column
-                .unionByName(split_df)
-            )
+        )
 
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
     if sft:
