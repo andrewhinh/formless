@@ -633,3 +633,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     download_model()
     main(args.cls, args.sft, args.dpo)
+
+
+# TODO:
+# - get better data (cutmix/mixup, filters, etc.)

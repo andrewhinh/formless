@@ -211,6 +211,7 @@ Python-Antivirus
 
 # Training
 **/artifacts/
+**/wandb/
 
 # windsurf rules
 .windsurfrules

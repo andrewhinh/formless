@@ -218,6 +218,12 @@ Run classifier training:
 modal run training/train.py --cls
 ```
 
+or:
+
+```bash
+uv run training/train.py --cls
+```
+
 Use trained classifier to filter train/val/test data (down to ~10k samples) to train VLM using full SFT and eval:
 
 ```bash
