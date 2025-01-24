@@ -160,7 +160,7 @@ lr_cycle_limit = 1  # learning rate cycle limit, cycles enabled if > 1
 lr_k_decay = 1.0  # learning rate k-decay for cosine/poly (default: 1.0)
 warmup_lr = 1e-5  # warmup learning rate (default: 1e-5)
 min_lr = 0  # lower lr bound for cyclic schedulers that hit 0 (default: 0)
-epochs = 300  # number of epochs to train (default: 300)
+epochs = 1  # number of epochs to train (default: 300)
 epoch_repeats = 0.0  # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).
 start_epoch = None  # manual epoch number (useful on restarts)
 decay_milestones = [90, 180, 270]  # list of decay epoch indices for multistep lr. must be increasing
@@ -236,7 +236,7 @@ experiment = ""  # name of train experiment, name of sub-folder for output
 eval_metric = "top1"  # Best metric (default: "top1")
 tta = 0  # Test/inference time augmentation (oversampling) factor. 0=None (default: 0)
 use_multi_epochs_loader = False  # use the multi-epochs-loader to save time at the beginning of every epoch
-log_wandb = False  # log training and validation metrics to wandb
+log_wandb = True  # log training and validation metrics to wandb
 model_hub_name = "-".join([safe_model_name(model), "cls"])  # name of the model when pushed to the HF hub
 
 # -----------------------------------------------------------------------------

@@ -212,7 +212,7 @@ or:
 uv run training/etl.py --cls
 ```
 
-Run classifier training:
+Run classifier training (e.g. [here](https://wandb.ai/andrewhinh/uncategorized/runs/f9eixipl)):
 
 ```bash
 modal run training/train.py --cls
