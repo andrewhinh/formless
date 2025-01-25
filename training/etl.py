@@ -2,11 +2,15 @@
 
 import base64
 import json
+import logging
 import math
 import multiprocessing
 import os
 import random
+from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
+from itertools import chain
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -16,12 +20,18 @@ import numpy as np
 import torch
 from datasketch import MinHash, MinHashLSH
 from dotenv import load_dotenv
+from huggingface_hub import login
 from imagehash import phash
+from more_itertools import chunked
 from PIL import Image
 from pydantic import Field
 from pyspark.sql import DataFrame, Row, SparkSession
 from pyspark.sql.functions import coalesce, col, lit, udf
 from pyspark.sql.types import ArrayType, IntegerType, StringType
+from timm.data import create_transform, resolve_data_config
+from timm.layers import apply_test_time_pool
+from timm.models import create_model
+from timm.utils import set_jit_fuser, setup_default_logging
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
 from vllm import LLM, SamplingParams
@@ -52,12 +62,9 @@ N_SAMPLES_PER_SPLIT_CLS = {
     "test": 100,
 }
 QUALITIES = ["1", "2", "3"]
-THRESHOLD = 0.5  # larger = less duplicates
-NUM_PERM = 64  # larger = high acc but high mem usage
-HASH_SZ = 8  # larger = more accurate but slower
 
-MODEL = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained model or ckpt
-TOKENIZER = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained tokenizer
+SLOW_RATER = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained model or ckpt
+SLOW_RATER_TOKENIZER = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained tokenizer
 QUANTIZATION = "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
 ENFORCE_EAGER = False
@@ -80,16 +87,63 @@ Return the quality of the handwriting as a number between 1 and 3.
 
 # -----------------------------------------------------------------------------
 
+# sft training data config
+
+FAST_RATER = "hf_hub:andrewhinh/resnet152-cls"
 N_SAMPLES_PER_SPLIT_SFT = {
     "train": 10000,
     "valid": 1000,
     "test": 1000,
 }
+BS = 2
+THRESHOLD = 0.5  # larger = less duplicates
+NUM_PERM = 64  # larger = high acc but high mem usage
+HASH_SZ = 8  # larger = more accurate but slower
+
+## imports
+
+HAS_NATIVE_AMP = False
+try:
+    if torch.cuda.amp.autocast is not None:
+        HAS_NATIVE_AMP = True
+except AttributeError:
+    pass
+
+try:
+    from functorch.compile import memory_efficient_fusion  # noqa: F401
+
+    HAS_FUNCTORCH = True
+except ImportError:
+    HAS_FUNCTORCH = False
+
+CHANNELS_LAST = False  # Use channels_last memory layout
+FUSER = ""  # Select jit fuser. One of ('', 'te', 'old', 'nvfuser')
+
+## scripting / codegen
+TORCHSCRIPT = False  # torch.jit.script the full model
+AOT_AUTOGRAD = False  # Enable AOT Autograd support.
+
+## device & distributed
+if modal.is_local():
+    GPU_COUNT = torch.cuda.device_count()
+else:
+    GPU_COUNT = 1
+DEVICE = torch.device("cuda" if GPU_COUNT > 0 else "mps" if torch.backends.mps.is_available() else "cpu")
+AMP = True  # use Native AMP for mixed precision training
+AMP_DTYPE = "bfloat16"  # lower precision AMP dtype (default: float16)
+HAS_COMPILE = hasattr(torch, "compile")
+TORCH_COMPILE = "inductor"  # Enable compilation w/ specified backend (default: inductor).
+
+## misc
+TEST_POOL = False  # enable test time pool
+TOPK = 1  # Top-k
 
 # -----------------------------------------------------------------------------
 
 # setup
-
+logging.getLogger("timm").setLevel(
+    logging.WARNING
+)  # disable "Safe alternative available for 'pytorch_model.bin' (as 'model.safetensors'). Loading weights using safetensors.""
 spark = (
     SparkSession.builder.config("spark.executor.memory", "20G")
     .config("spark.driver.memory", "20G")
@@ -106,29 +160,80 @@ spark = (
     .config("spark.sql.parquet.compression.codec", "snappy")
     .getOrCreate()
 )
-
 random.seed(RANDOM_SEED)
 load_dotenv(".env" if IN_PROD else ".env.dev")
 
 
 ## container startup fn
-def download_model():
-    from huggingface_hub import login, snapshot_download
+def download_models():
+    from huggingface_hub import snapshot_download
 
-    if not os.path.exists(MODEL):
-        login(token=os.getenv("HF_TOKEN"), new_session=False)
-        snapshot_download(
-            MODEL,
-            ignore_patterns=["*.pt", "*.bin"],
-        )
-    else:  # check if preprocessor_config.json was successfully copied; if not, do so
-        if not os.path.exists(f"{MODEL}/preprocessor_config.json"):
-            login(token=os.getenv("HF_TOKEN"), new_session=False)
-            tok_path = snapshot_download(
-                TOKENIZER,
+    login(token=os.getenv("HF_TOKEN"), new_session=False)
+
+    for model in [SLOW_RATER, SLOW_RATER_TOKENIZER, FAST_RATER.split("hf_hub:")[1]]:
+        if not os.path.exists(model):
+            snapshot_download(
+                model,
                 ignore_patterns=["*.pt", "*.bin"],
             )
-            os.rename(f"{tok_path}/preprocessor_config.json", f"{MODEL}/preprocessor_config.json")
+        else:  # check if preprocessor_config.json was successfully copied; if not, do so
+            if not os.path.exists(f"{model}/preprocessor_config.json"):
+                tok_path = snapshot_download(
+                    model,
+                    ignore_patterns=["*.pt", "*.bin"],
+                )
+                os.rename(f"{tok_path}/preprocessor_config.json", f"{model}/preprocessor_config.json")
+
+
+def setup_classifier(model_name: str):  # noqa: C901
+    setup_default_logging()
+
+    if GPU_COUNT > 0:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+
+    # resolve AMP arguments based on PyTorch / Apex availability
+    amp_autocast = suppress
+    if AMP:
+        assert HAS_NATIVE_AMP, "Please update PyTorch to a version with native AMP (or use APEX)."
+        assert AMP_DTYPE in ("float16", "bfloat16")
+        amp_dtype = torch.bfloat16 if AMP_DTYPE == "bfloat16" else torch.float16
+        amp_autocast = partial(torch.autocast, device_type=DEVICE.type, dtype=amp_dtype)
+
+    if FUSER:
+        set_jit_fuser(FUSER)
+
+    # create model
+    model = create_model(model_name, pretrained=True)
+    data_config = resolve_data_config(
+        {
+            "model": model_name,
+        },
+        model=model,
+    )
+    transforms = create_transform(**data_config, is_training=False)
+    if TEST_POOL:
+        model, _ = apply_test_time_pool(model, data_config)
+
+    model = model.to(DEVICE)
+    model.eval()
+    if CHANNELS_LAST:
+        model = model.to(memory_format=torch.channels_last)
+
+    if TORCHSCRIPT:
+        model = torch.jit.script(model)
+    elif TORCH_COMPILE:
+        assert HAS_COMPILE, "A version of torch w/ torch.compile() is required for --compile, possibly a nightly."
+        torch._dynamo.reset()
+        model = torch.compile(model, backend=TORCH_COMPILE)
+    elif AOT_AUTOGRAD:
+        assert HAS_FUNCTORCH, "functorch is needed for --aot-autograd"
+        model = memory_efficient_fusion(model)
+
+    if GPU_COUNT > 1:
+        model = torch.nn.DataParallel(model, device_ids=list(range(GPU_COUNT)))
+
+    return transforms, amp_autocast, model
 
 
 # -----------------------------------------------------------------------------
@@ -152,7 +257,7 @@ IMAGE = (
         "pyspark==3.5.4",
     )
     .run_function(
-        download_model,
+        download_models,
         secrets=SECRETS,
         volumes=VOLUME_CONFIG,
     )
@@ -161,10 +266,6 @@ ETL_TIMEOUT = 24 * 60 * MINUTES
 
 GPU_TYPE = "l4"
 GPU_SIZE = None  # options = None, "40GB", "80GB"
-if modal.is_local():
-    GPU_COUNT = torch.cuda.device_count()
-else:
-    GPU_COUNT = 1
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
@@ -393,7 +494,7 @@ def analyze_ink(img_path: Path) -> int:
     # load pretrained vlm if not already loaded
     if "llm" not in globals():
         llm = LLM(
-            model=MODEL,
+            model=SLOW_RATER,
             enforce_eager=ENFORCE_EAGER,
             max_num_seqs=MAX_NUM_SEQS,
             tensor_parallel_size=GPU_COUNT,
@@ -422,6 +523,44 @@ def analyze_ink(img_path: Path) -> int:
         os.mkdir(img_path.parent / str(writing_quality))
     img.save(img_path.parent / str(writing_quality) / img_path.name)
     return writing_quality
+
+
+@app.function(
+    image=IMAGE,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def classify_ink(img_paths: list[Path]) -> list[int]:
+    """
+    Classify ink and return writing quality.
+    """
+    if "classifier" not in globals():
+        transforms, amp_autocast, classifier = setup_classifier(FAST_RATER)
+        classifier.eval()
+
+    img_pts = torch.cat([transforms(Image.open(img_path).convert("RGB")).unsqueeze(0) for img_path in img_paths]).to(
+        DEVICE
+    )
+    with torch.no_grad():
+        with amp_autocast():
+            outputs = classifier(img_pts)
+
+    writing_qualities = []
+    for output in outputs:
+        output = output.softmax(-1)
+        output, indices = output.topk(TOPK)
+        labels = classifier.pretrained_cfg["label_names"]
+        predictions = [{"label": labels[i], "score": v.item()} for i, v in zip(indices, output, strict=False)]
+        preds, _ = [p["label"] for p in predictions], [p["score"] for p in predictions]
+        writing_quality = preds[0]
+        writing_qualities.append(writing_quality)
+
+    for img_path, writing_quality in zip(img_paths, writing_qualities, strict=False):
+        if not os.path.exists(img_path.parent / str(writing_quality)):
+            os.mkdir(img_path.parent / str(writing_quality))
+        Image.open(img_path).convert("RGB").save(img_path.parent / str(writing_quality) / img_path.name)
+    return writing_qualities
 
 
 # -----------------------------------------------------------------------------
@@ -499,7 +638,6 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         # run model to assign writing quality to random subset
         df = df.withColumn("writing_quality", lit(None).cast(IntegerType()))
         all_updates = []
-
         for split in SPLITS:
             ## get random subset of split data
             split_df = df.filter(col("split") == split)
@@ -511,7 +649,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             if modal.is_local():
                 writing_qualities = [
                     analyze_ink.local(img_path) for img_path in tqdm(img_paths, desc=split, total=len(img_paths))
-                ]
+                ]  # no thread_map since each call heavily uses GPU
             else:
                 writing_qualities = analyze_ink.map(img_paths)
 
@@ -521,10 +659,10 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
             all_updates.append(updates_df)
 
+        ## write to df
         final_updates_df = all_updates[0]
         for udf in all_updates[1:]:
             final_updates_df = final_updates_df.unionByName(udf)
-
         df = (
             df.alias("main")
             .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
@@ -536,10 +674,56 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
             )
         )
-
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
     if sft:
         # run trained classifier on df
+        all_updates = []
+        for split in SPLITS:
+            split_df = df.filter(col("split") == split)
+            split_df_wq_null = split_df.filter(split_df.writing_quality.isNull())
+
+            img_paths = [Path(row.img_path) for row in split_df_wq_null.select("img_path").collect()]
+            if modal.is_local():
+                img_batches = list(chunked(img_paths, BS))
+                writing_qualities = list(
+                    tqdm(
+                        chain.from_iterable(
+                            thread_map(
+                                classify_ink.local,
+                                img_batches,
+                                desc=split,
+                                total=len(img_batches),
+                                max_workers=multiprocessing.cpu_count(),
+                            )
+                        ),
+                        desc=split,
+                        total=len(img_paths),
+                    )
+                )
+            else:
+                writing_qualities = classify_ink.map(img_paths)
+
+            ## write to df
+            new_schema = ["img_path", "split", "writing_quality"]
+            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
+            updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
+            all_updates.append(updates_df)
+
+        ## write to df
+        final_updates_df = all_updates[0]
+        for udf in all_updates[1:]:
+            final_updates_df = final_updates_df.unionByName(udf)
+        df = (
+            df.alias("main")
+            .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
+            .select(
+                col("main.img_path"),
+                col("main.label"),
+                col("main.split"),
+                coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
+            )
+        )
+        df.write.mode("overwrite").parquet(PARQUET_FILENAME)
 
         # filter to only get data with writing quality == 1
         filtered_dfs = []
@@ -631,7 +815,7 @@ if __name__ == "__main__":
     parser.add_argument("--sft", action="store_true")
     parser.add_argument("--dpo", action="store_true")
     args = parser.parse_args()
-    download_model()
+    download_models()
     main(args.cls, args.sft, args.dpo)
 
 

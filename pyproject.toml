@@ -17,6 +17,7 @@ dependencies = [
     "huggingface-hub[hf-transfer]>=0.27.1",
     "imagehash==4.3.1",
     "modal>=0.64.178",
+    "more-itertools>=10.6.0",
     "ninja==1.11.1",
     "packaging==23.1",
     "pillow>=10.4.0",
