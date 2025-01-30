@@ -18,14 +18,16 @@ import cairo
 import modal
 import numpy as np
 import torch
-from datasketch import MinHash, MinHashLSH
+from datasketch import MinHash
 from dotenv import load_dotenv
 from huggingface_hub import login
 from imagehash import phash
 from more_itertools import chunked
 from PIL import Image
 from pydantic import Field
-from pyspark.sql import DataFrame, Row, SparkSession
+from pyspark.ml.feature import MinHashLSH
+from pyspark.ml.linalg import Vectors, VectorUDT
+from pyspark.sql import Row, SparkSession
 from pyspark.sql.functions import coalesce, col, lit, udf
 from pyspark.sql.types import ArrayType, IntegerType, StringType
 from timm.data import create_transform, resolve_data_config
@@ -57,9 +59,9 @@ from utils import (
 RANDOM_SEED = 42
 SPLITS = ["train", "valid", "test"]
 N_SAMPLES_PER_SPLIT_CLS = {
-    "train": 1000,
-    "valid": 100,
-    "test": 100,
+    "train": 1000.0,
+    "valid": 100.0,
+    "test": 100.0,
 }
 QUALITIES = ["1", "2", "3"]
 
@@ -90,15 +92,7 @@ Return the quality of the handwriting as a number between 1 and 3.
 # sft training data config
 
 FAST_RATER = "hf_hub:andrewhinh/resnet152-cls"
-N_SAMPLES_PER_SPLIT_SFT = {
-    "train": 10000,
-    "valid": 1000,
-    "test": 1000,
-}
-BS = 2
-THRESHOLD = 0.5  # larger = less duplicates
-NUM_PERM = 64  # larger = high acc but high mem usage
-HASH_SZ = 8  # larger = more accurate but slower
+BS = 2048  # max on RTX 3090
 
 ## imports
 
@@ -137,6 +131,16 @@ TORCH_COMPILE = "inductor"  # Enable compilation w/ specified backend (default: 
 ## misc
 TEST_POOL = False  # enable test time pool
 TOPK = 1  # Top-k
+
+## dedup
+NUM_PERM = 64  # larger = high acc but high mem usage
+HASH_SZ = 8  # larger = more accurate but slower
+THRESHOLD = 0.2  # larger = less duplicates
+N_SAMPLES_PER_SPLIT_SFT = {
+    "train": 10000.0,
+    "valid": 1000.0,
+    "test": 1000.0,
+}
 
 # -----------------------------------------------------------------------------
 
@@ -363,67 +367,6 @@ def render_ink(
         return Image.frombuffer("RGB", size, memory.tobytes(), "raw", "BGRX", stride)
 
 
-def compute_phash(img_path):
-    """
-    Compute the perceptual hash of an image.
-
-    Args:
-    img_path (str): The path to the image file.
-
-    Returns
-    -------
-    str: The perceptual hash of the image.
-    """
-    return str(phash(Image.open(img_path), hash_size=HASH_SZ))
-
-
-def compute_minhash(phash_str):
-    """
-    Compute the minhash of a perceptual hash.
-
-    Args:
-    phash_str (str): The perceptual hash of the image.
-
-    Returns
-    -------
-    list: The minhash of the image.
-    """
-    m = MinHash(num_perm=NUM_PERM)
-    m.update(phash_str.encode("utf8"))
-    return list(m.hashvalues)
-
-
-def dedup_per_split(split_df: DataFrame) -> DataFrame:
-    """
-    Given a DataFrame containing data from a specific split, return a new DataFrame with duplicates removed
-    using MinHashLSH.
-
-    Args:
-        split_df (DataFrame): DataFrame containing data from a specific split.
-
-    Returns
-    -------
-        DataFrame: new DataFrame with duplicates removed.
-    """
-    split_df = split_df.withColumn("phash", udf(compute_phash, StringType())(col("img_path"))).withColumn(
-        "minhash", udf(compute_minhash, ArrayType(IntegerType()))(col("phash"))
-    )
-    lsh = MinHashLSH(threshold=THRESHOLD, num_perm=NUM_PERM)
-
-    def is_duplicate(row):
-        minhash = MinHash(num_perm=NUM_PERM)
-        minhash.hashvalues = row["minhash"]
-        if not lsh.query(minhash):
-            lsh.insert(row["img_path"], minhash)
-            return False
-        return True
-
-    unique_rows = split_df.rdd.filter(lambda row: not is_duplicate(row.asDict())).collect()
-    deduped_df = spark.createDataFrame(unique_rows, schema=split_df.schema).drop("phash", "minhash")
-
-    return deduped_df
-
-
 @app.function(
     image=IMAGE,
     volumes=VOLUME_CONFIG,
@@ -535,32 +478,75 @@ def classify_ink(img_paths: list[Path]) -> list[int]:
     """
     Classify ink and return writing quality.
     """
+    global transforms, amp_autocast, classifier
     if "classifier" not in globals():
         transforms, amp_autocast, classifier = setup_classifier(FAST_RATER)
         classifier.eval()
 
-    img_pts = torch.cat([transforms(Image.open(img_path).convert("RGB")).unsqueeze(0) for img_path in img_paths]).to(
-        DEVICE
+    img_pts = torch.cat(
+        thread_map(
+            lambda p: transforms(Image.open(p).convert("RGB")).unsqueeze(0).to(DEVICE),
+            img_paths,
+        )
     )
+
     with torch.no_grad():
         with amp_autocast():
             outputs = classifier(img_pts)
 
-    writing_qualities = []
-    for output in outputs:
-        output = output.softmax(-1)
-        output, indices = output.topk(TOPK)
-        labels = classifier.pretrained_cfg["label_names"]
-        predictions = [{"label": labels[i], "score": v.item()} for i, v in zip(indices, output, strict=False)]
-        preds, _ = [p["label"] for p in predictions], [p["score"] for p in predictions]
-        writing_quality = preds[0]
-        writing_qualities.append(writing_quality)
+    labels = classifier.pretrained_cfg["label_names"]
+    predictions = outputs.softmax(-1).topk(TOPK, dim=-1)
+    writing_qualities = [int(labels[idx[0]]) for idx in predictions.indices]
 
     for img_path, writing_quality in zip(img_paths, writing_qualities, strict=False):
-        if not os.path.exists(img_path.parent / str(writing_quality)):
-            os.mkdir(img_path.parent / str(writing_quality))
-        Image.open(img_path).convert("RGB").save(img_path.parent / str(writing_quality) / img_path.name)
+        output_dir = img_path.parent / str(writing_quality)
+        output_dir.mkdir(exist_ok=True)
+        Image.open(img_path).convert("RGB").save(output_dir / img_path.name)
+
     return writing_qualities
+
+
+def compute_minhash(phash_str):
+    """
+    Compute the minhash of a perceptual hash.
+
+    Args:
+    phash_str (str): The perceptual hash of the image.
+
+    Returns
+    -------
+    list: The minhash of the image.
+    """
+    m = MinHash(num_perm=NUM_PERM)
+    m.update(phash_str.encode("utf8"))
+    return [int(hash_value) for hash_value in m.hashvalues]  # Convert uint64 to int
+
+
+def generate_json(row):
+    """
+    Generate JSON entry for each row in the DataFrame.
+    """
+    return json.dumps(
+        {
+            "messages": [
+                {
+                    "content": DEFAULT_SYSTEM_PROMPT,
+                    "role": "system",
+                },
+                {
+                    "content": f"<image>{DEFAULT_QUESTION}",
+                    "role": "user",
+                },
+                {
+                    "content": row.label,
+                    "role": "assistant",
+                },
+            ],
+            "images": [
+                row.img_path,
+            ],
+        }
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -645,24 +631,30 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 False, N_SAMPLES_PER_SPLIT_CLS[split] / split_cts[split], float(RANDOM_SEED)
             )
 
+            ## run model
             img_paths = [Path(row.img_path) for row in split_filter_df.select("img_path").collect()]
             if modal.is_local():
-                writing_qualities = [
-                    analyze_ink.local(img_path) for img_path in tqdm(img_paths, desc=split, total=len(img_paths))
-                ]  # no thread_map since each call heavily uses GPU
+                writing_qualities = list(
+                    tqdm(
+                        (analyze_ink.local(p) for p in img_paths),
+                        desc=split,
+                        total=len(img_paths),
+                    )
+                )
             else:
                 writing_qualities = analyze_ink.map(img_paths)
 
-            ## write to df
+            ## save to write later
             new_schema = ["img_path", "split", "writing_quality"]
             data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
             updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
             all_updates.append(updates_df)
+            print(f"Labeled {N_SAMPLES_PER_SPLIT_CLS[split]} samples for split {split}")
 
         ## write to df
         final_updates_df = all_updates[0]
-        for udf in all_updates[1:]:
-            final_updates_df = final_updates_df.unionByName(udf)
+        for update_df in all_updates[1:]:
+            final_updates_df = final_updates_df.unionByName(update_df)
         df = (
             df.alias("main")
             .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
@@ -679,84 +671,102 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         # run trained classifier on df
         all_updates = []
         for split in SPLITS:
+            ## get non-labeled samples
             split_df = df.filter(col("split") == split)
             split_df_wq_null = split_df.filter(split_df.writing_quality.isNull())
 
+            ## run model
             img_paths = [Path(row.img_path) for row in split_df_wq_null.select("img_path").collect()]
+            if not img_paths:
+                continue
             if modal.is_local():
                 img_batches = list(chunked(img_paths, BS))
                 writing_qualities = list(
                     tqdm(
-                        chain.from_iterable(
-                            thread_map(
-                                classify_ink.local,
-                                img_batches,
-                                desc=split,
-                                total=len(img_batches),
-                                max_workers=multiprocessing.cpu_count(),
-                            )
-                        ),
+                        chain.from_iterable(classify_ink.local(p) for p in img_batches),
                         desc=split,
-                        total=len(img_paths),
+                        total=len(img_batches),
                     )
                 )
             else:
                 writing_qualities = classify_ink.map(img_paths)
 
-            ## write to df
+            ## save to write later
             new_schema = ["img_path", "split", "writing_quality"]
             data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
             updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
             all_updates.append(updates_df)
 
         ## write to df
-        final_updates_df = all_updates[0]
-        for udf in all_updates[1:]:
-            final_updates_df = final_updates_df.unionByName(udf)
-        df = (
-            df.alias("main")
-            .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
-            .select(
-                col("main.img_path"),
-                col("main.label"),
-                col("main.split"),
-                coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
+        if all_updates:
+            final_updates_df = all_updates[0]
+            for update_df in all_updates[1:]:
+                final_updates_df = final_updates_df.unionByName(update_df)
+            df = (
+                df.alias("main")
+                .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
+                .select(
+                    col("main.img_path"),
+                    col("main.label"),
+                    col("main.split"),
+                    coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
+                )
             )
-        )
-        df.write.mode("overwrite").parquet(PARQUET_FILENAME)
+            df.write.mode("overwrite").parquet(PARQUET_FILENAME)
 
         # filter to only get data with writing quality == 1
         filtered_dfs = []
         for split in SPLITS:
             split_df = df.filter(col("split") == split)
             split_filter_df = split_df.filter(split_df.writing_quality == 1)
-            split_filter_df = split_filter_df.sample(False, N_SAMPLES_PER_SPLIT_SFT[split], float(RANDOM_SEED))
             filtered_dfs.append(split_filter_df)
-            print(f"Found {split_filter_df.count()} samples with writing quality == 1 for split {split}")
         filter_df = filtered_dfs[0]
         for filtered_df in filtered_dfs[1:]:
             filter_df = filter_df.unionByName(filtered_df)
-        df = filter_df
 
         # deduplication
         dedup_dfs = []
+
+        ## compute minhash vec
+        compute_phash_udf = udf(lambda img_path: str(phash(Image.open(img_path), hash_size=HASH_SZ)), StringType())
+        compute_minhash_udf = udf(compute_minhash, ArrayType(IntegerType()))
+        vector_udf = udf(lambda minhash: Vectors.dense(minhash), VectorUDT())
+
+        filter_df = filter_df.withColumn("phash", compute_phash_udf(col("img_path")))
+        filter_df = filter_df.withColumn("minhash", compute_minhash_udf(col("phash")))
+        filter_df = filter_df.withColumn("minhash_vec", vector_udf(col("minhash")))
+
+        ## dedup with lsh and randomly sample
         for split in SPLITS:
-            split_df = df.filter(col("split") == split)
-            split_dedup_df = dedup_per_split(split_df)
+            split_df = filter_df.filter(col("split") == split)
+            lsh = MinHashLSH(inputCol="minhash_vec", outputCol="hashes", numHashTables=NUM_PERM)
+            lsh_model = lsh.fit(split_df)
+            deduped_df = (
+                lsh_model.approxSimilarityJoin(split_df, split_df, THRESHOLD, distCol="distance")
+                .filter("datasetA.img_path != datasetB.img_path")
+                .select("datasetA.*")
+                .distinct()
+            )
+
+            split_dedup_df = deduped_df.drop("phash", "minhash", "minhash_vec", "hashes")
+            split_dedup_df = split_dedup_df.sample(
+                False, N_SAMPLES_PER_SPLIT_SFT[split] / split_cts[split], float(RANDOM_SEED)
+            )
             dedup_dfs.append(split_dedup_df)
-            print(f"Found {split_dedup_df.count()} deduplicated samples for split {split}")
+            print(f"Collected {N_SAMPLES_PER_SPLIT_SFT[split]} samples for split {split}")
         final_dedup_df = dedup_dfs[0]
         for dedup_df in dedup_dfs[1:]:
             final_dedup_df = final_dedup_df.unionByName(dedup_df)
-        df = final_dedup_df
 
         # write to json
         for split in SPLITS:
-            output_path = Path(f"{DATA_VOL_PATH}/{split}/data.json")
             split_df = df.filter(col("split") == split)
-            json_output = []
-            for row in split_df.collect():
-                json_entry = {
+
+            data = split_df.select("label", "img_path").collect()
+            labels = [row.label for row in data]
+            img_paths = [row.img_path for row in data]
+            json_output = [
+                {
                     "messages": [
                         {
                             "content": DEFAULT_SYSTEM_PROMPT,
@@ -767,18 +777,25 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                             "role": "user",
                         },
                         {
-                            "content": row.label,
+                            "content": label,
                             "role": "assistant",
                         },
                     ],
                     "images": [
-                        row.img_path,
+                        img_path,
                     ],
                 }
-                json_output.append(json_entry)
+                for label, img_path in zip(
+                    labels,
+                    img_paths,
+                    strict=False,
+                )
+            ]
+
+            output_path = Path(f"{DATA_VOL_PATH}/{split}/data.json")
             with open(output_path, "w") as f:
                 json.dump(json_output, f, indent=4)
-            print(f"Deduplicated data written to {output_path}")
+            print(f"Wrote to {output_path}")
     if dpo:
         # load df
 

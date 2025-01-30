@@ -78,13 +78,15 @@ AWS_REGION=
 OPENAI_API_KEY=
 ```
 
-### Useful Commands
+### Useful Tips
 
 Migrate db (do before running the frontend/api):
 
 ```bash
 make migrate ENV=<env> MSG=<message>
 ```
+
+Visit `http://localhost:4040/` to see the Spark UI when running `training/etl.py`.
 
 ### Repository Structure
 
