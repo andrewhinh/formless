@@ -212,6 +212,8 @@ Python-Antivirus
 # Training
 **/artifacts/
 **/wandb/
+**/LLaMA-Factory/
+**/training/utils.py
 
 # windsurf rules
 .windsurfrules

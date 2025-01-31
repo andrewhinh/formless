@@ -205,34 +205,46 @@ make sync
 Label subset of data (~1000 samples) to train writing quality classifier:
 
 ```bash
-modal run training/etl.py --cls
+uv run training/etl.py --cls
 ```
 
-or:
+or
 
 ```bash
-uv run training/etl.py --cls
+modal run training/etl.py --cls
 ```
 
 Run classifier training (e.g. [here](https://wandb.ai/andrewhinh/uncategorized/runs/f9eixipl)):
 
 ```bash
+yes | cp -f utils.py training/utils.py && cd training && uv sync && FORCE_TORCHRUN=1 uv run train.py --cls && cd .. && rm training/utils.py
+```
+
+or
+
+```bash
 modal run training/train.py --cls
 ```
 
-or:
+Use trained classifier to filter train/val/test data (down to ~10k samples) to train VLM using full SFT and eval:
 
 ```bash
-uv run training/train.py --cls
+uv run training/etl.py --sft
 ```
 
-Use trained classifier to filter train/val/test data (down to ~10k samples) to train VLM using full SFT and eval:
+or
 
 ```bash
 modal run training/etl.py --sft
 ```
 
 Run SFT:
+
+```bash
+yes | cp -f utils.py training/utils.py && cd training && uv sync && cd LLaMA-Factory && uv pip install -e ".[torch,metrics]" && cd .. && FORCE_TORCHRUN=1 uv run train.py --sft && cd .. && rm training/utils.py
+```
+
+or
 
 ```bash
 modal run training/train.py --sft
@@ -245,6 +257,12 @@ modal run training/etl.py --dpo
 ```
 
 Run DPO:
+
+```bash
+yes | cp -f utils.py training/utils.py && cd training && uv sync && cd LLaMA-Factory && uv pip install -e ".[torch,metrics]" && cd .. && FORCE_TORCHRUN=1 uv run train.py --dpo && cd .. && rm training/utils.py
+```
+
+or
 
 ```bash
 modal run training/train.py --dpo

@@ -17,6 +17,7 @@ import modal
 import torch
 import torch.nn as nn
 import torchvision.utils
+import yaml
 from dotenv import load_dotenv
 from huggingface_hub import HfApi, login
 from timm import utils
@@ -74,12 +75,17 @@ has_compile = hasattr(torch, "compile")
 
 _logger = logging.getLogger("train")
 
+PARENT_PATH = Path(__file__).parent
+ARTIFACT_PATH = PARENT_PATH / "artifacts"
+
+
 # -----------------------------------------------------------------------------
 
-ARTIFACT_PATH = Path(__file__).parent / "artifacts"
+# cls
+
 classes = ["1", "2", "3"]
 
-# Dataset parameters
+## dataset
 data_dir = ARTIFACT_PATH / "mathwriting-2024"  # path to dataset (root dir)
 dataset = ""  # dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)
 train_split = "train"  # dataset train split (default: train)
@@ -88,7 +94,7 @@ input_img_mode = None  # Dataset image conversion mode for input images.
 input_key = None  # Dataset key for input images.
 target_key = None  # Dataset key for target labels.
 
-# Model parameters
+## model
 model = "resnet152"  # Name of model to train (default: "resnet50")
 pretrained = True  # Start with pretrained version of specified network (if avail)
 pretrained_path = None  # Load this checkpoint as if they were the pretrained weights (with adaptation).
@@ -115,11 +121,11 @@ model_kwargs = {}  # Additional model keyword arguments
 head_init_scale = None  # Head initialization scale
 head_init_bias = None  # Head initialization bias value
 
-# scripting / codegen
+## scripting / codegen
 torchscript = False  # torch.jit.script the full model
 torchcompile = None  # Enable compilation w/ specified backend (default: "inductor")
 
-# Device & distributed
+## device & distributed
 device = "cpu"  # Device (accelerator) to use.
 if torch.cuda.is_available():
     device = "cuda"
@@ -133,7 +139,7 @@ no_ddp_bb = False  # Force broadcast buffers for native DDP to off.
 synchronize_step = False  # torch.cuda.synchronize() end of each step
 device_modules = None  # Python imports for device backend modules.
 
-# Optimizer parameters
+## optimizer
 opt = "adamw"  # Optimizer (default: "sgd")
 opt_eps = None  # Optimizer Epsilon (default: None, use opt default)
 opt_betas = None  # Optimizer Betas (default: None, use opt default)
@@ -144,7 +150,7 @@ clip_mode = "norm"  # Gradient clipping mode. One of ("norm", "value", "agc")
 layer_decay = None  # layer-wise learning rate decay (default: None)
 opt_kwargs = {}  # Additional optimizer keyword arguments
 
-# Learning rate schedule parameters
+## lr schedule
 sched = "cosine"  # LR scheduler (default: "cosine")
 sched_on_updates = False  # Apply LR scheduler step on update instead of epoch end.
 lr = 3e-4  # learning rate, overrides lr-base if set (default: None)
@@ -171,7 +177,7 @@ cooldown_epochs = 0  # epochs to cooldown LR at min_lr, after cyclic schedule en
 patience_epochs = 10  # patience epochs for Plateau LR scheduler (default: 10)
 decay_rate = 0.1  # LR decay rate (default: 0.1)
 
-# Augmentation & regularization parameters
+## augmentation & regularization
 no_aug = False  # Disable all training augmentation, override other train aug args
 train_crop_mode = None  # Crop-mode in train
 scale = [0.08, 1.0]  # Random resize scale (default: 0.08 1.0)
@@ -208,20 +214,20 @@ drop_connect = None  # Drop connect rate, DEPRECATED, use drop-path (default: No
 drop_path = None  # Drop path rate (default: None)
 drop_block = None  # Drop block rate (default: None)
 
-# Batch norm parameters (only works with gen_efficientnet based models currently)
+## batch norm parameters (only works with gen_efficientnet based models currently)
 bn_momentum = None  # BatchNorm momentum override (if not None)
 bn_eps = None  # BatchNorm epsilon override (if not None)
 sync_bn = True  # Enable NVIDIA Apex or Torch synchronized BatchNorm.
 dist_bn = "reduce"  # Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")
 split_bn = False  # Enable separate BN layers per augmentation split.
 
-# Model Exponential Moving Average
+## model exp moving avg
 model_ema = True  # Enable tracking moving average of model weights.
 model_ema_force_cpu = False  # Force ema to be tracked on CPU, rank=0 node only. Disables EMA validation.
 model_ema_decay = 0.9998  # Decay factor for model weights moving average (default: 0.9998)
 model_ema_warmup = False  # Enable warmup for model EMA decay.
 
-# Misc
+## misc
 seed = 42  # random seed (default: 42)
 worker_seeding = "all"  # worker seed mode (default: all)
 log_interval = 1  # how many batches to wait before logging training status
@@ -239,8 +245,7 @@ use_multi_epochs_loader = False  # use the multi-epochs-loader to save time at t
 log_wandb = True  # log training and validation metrics to wandb
 model_hub_name = "-".join([safe_model_name(model), "cls"])  # name of the model when pushed to the HF hub
 
-# -----------------------------------------------------------------------------
-
+## log to hf
 config_keys = [
     k
     for k, v in globals().items()
@@ -252,7 +257,7 @@ config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}  #
 # -----------------------------------------------------------------------------
 
 # Modal
-
+TRAIN_REPO_PATH = PARENT_PATH / "LLaMA-Factory" if modal.is_local() else "/LLaMA-Factory"
 IMAGE = (
     GPU_IMAGE.run_commands(
         [
@@ -260,14 +265,7 @@ IMAGE = (
             "cd /LLaMA-Factory && pip install -e '.[torch,metrics]'",
         ]
     )
-    .copy_local_file("training/dataset_info.json", "/LLaMA-Factory/data/dataset_info.json")
-    .copy_local_file("training/ds_z3_config.json", "/LLaMA-Factory/ds_z3_config.json")
-    .copy_local_file("training/qwen2vl_full_sft.yaml", "/LLaMA-Factory/qwen2vl_full_sft.yaml")
-    .copy_local_file("training/qwen2vl_lora_dpo_train.yaml", "/LLaMA-Factory/qwen2vl_lora_dpo_train.yaml")
-    .copy_local_file("training/qwen2vl_lora_dpo_merge.yaml", "/LLaMA-Factory/qwen2vl_lora_dpo_merge.yaml")
-    .pip_install(
-        "deepspeed==0.15.4",
-    )
+    .pip_install("deepspeed==0.15.4", "timm==1.0.14")
     .env(
         {
             "FORCE_TORCHRUN": "1",
@@ -285,6 +283,185 @@ if GPU_TYPE.lower() == "a100":
 
 APP_NAME = f"{NAME}-train"
 app = modal.App(name=APP_NAME)
+
+
+## dataset_info.json
+dataset_info = {
+    "sft": {
+        "file_name": f"{TRAIN_REPO_PATH}/data/sft.json",
+        "formatting": "sharegpt",
+        "columns": {"messages": "messages", "images": "images"},
+        "tags": {
+            "role_tag": "role",
+            "content_tag": "content",
+            "user_tag": "user",
+            "assistant_tag": "assistant",
+            "system_tag": "system",
+        },
+    },
+    "dpo": {
+        "file_name": f"{TRAIN_REPO_PATH}/data/dpo.json",
+        "ranking": True,
+        "formatting": "sharegpt",
+        "columns": {"messages": "conversations", "chosen": "chosen", "rejected": "rejected", "images": "images"},
+    },
+}
+with open(f"{TRAIN_REPO_PATH}/data/dataset_info.json", "w") as f:
+    json.dump(dataset_info, f, indent=4)
+
+## ds_z3_config.json
+ds_z3_config = {
+    "train_batch_size": "auto",
+    "train_micro_batch_size_per_gpu": "auto",
+    "gradient_accumulation_steps": "auto",
+    "gradient_clipping": "auto",
+    "zero_allow_untested_optimizer": True,
+    "fp16": {
+        "enabled": "auto",
+        "loss_scale": 0,
+        "loss_scale_window": 1000,
+        "initial_scale_power": 16,
+        "hysteresis": 2,
+        "min_loss_scale": 1,
+    },
+    "bf16": {"enabled": "auto"},
+    "zero_optimization": {
+        "stage": 3,
+        "overlap_comm": True,
+        "contiguous_gradients": True,
+        "sub_group_size": 1e9,
+        "reduce_bucket_size": "auto",
+        "stage3_prefetch_bucket_size": "auto",
+        "stage3_param_persistence_threshold": "auto",
+        "stage3_max_live_parameters": 1e9,
+        "stage3_max_reuse_distance": 1e9,
+        "stage3_gather_16bit_weights_on_model_save": True,
+    },
+}
+with open(f"{TRAIN_REPO_PATH}/ds_z3_config.json", "w") as f:
+    json.dump(ds_z3_config, f, indent=4)
+
+if modal.is_local():
+    DATA_VOL_PATH = str(ARTIFACT_PATH / "mathwriting-2024")
+    RUNS_VOL_PATH = str(ARTIFACT_PATH / "runs" / "cls")
+    if not os.path.exists(DATA_VOL_PATH):
+        raise Exception(f"""
+{DATA_VOL_PATH} does not exist.
+""")
+else:
+    DATA_VOL_PATH = f"/{DATA_VOLUME}"
+    RUNS_VOL_PATH = f"/{RUNS_VOLUME}"
+
+
+# -----------------------------------------------------------------------------
+
+# sft
+
+sft_config = {
+    ### model
+    "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
+    "trust_remote_code": True,
+    ### method
+    "stage": "sft",
+    "do_train": True,
+    "finetuning_type": "full",
+    "freeze_vision_tower": False,
+    "train_mm_proj_only": False,
+    "deepspeed": "ds_z3_config.json",
+    ### dataset
+    "dataset": "sft",
+    "template": "qwen2_vl",
+    "cutoff_len": 131072,  # 2**17
+    "max_samples": 1000,
+    "overwrite_cache": True,
+    "preprocessing_num_workers": 16,  # 16 = max
+    ### output
+    "output_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-full-sft",
+    "logging_steps": 10,
+    "save_steps": 500,
+    "plot_loss": True,
+    "overwrite_output_dir": True,
+    "include_effective_tokens_per_second": True,
+    ### train
+    "per_device_train_batch_size": 1,
+    "gradient_accumulation_steps": 2,
+    "learning_rate": 1.0e-5,
+    "num_train_epochs": 30.0,
+    "lr_scheduler_type": "cosine",
+    "warmup_ratio": 0.1,
+    "bf16": True,
+    "ddp_timeout": 180000000,
+    ### eval
+    "val_size": 0.1,
+    "per_device_eval_batch_size": 1,
+    "eval_strategy": "steps",
+    "eval_steps": 500,
+}
+with open(f"{TRAIN_REPO_PATH}/qwen2vl_full_sft.yaml", "w") as f:
+    yaml.dump(sft_config, f)
+
+# -----------------------------------------------------------------------------
+
+# dpo
+
+dpo_train_config = {
+    ### model
+    "model_name_or_path": "andrewhinh/qwen2-vl-7b-instruct-full-sft",
+    "trust_remote_code": True,
+    ### method
+    "stage": "dpo",
+    "do_train": True,
+    "finetuning_type": "lora",
+    "lora_target": "all",
+    "pref_beta": 0.1,
+    "pref_loss": "sigmoid",  # choices: [sigmoid (dpo), orpo, simpo]
+    ### dataset
+    "dataset": "dpo",
+    "template": "qwen2_vl",
+    "cutoff_len": 131072,  # 2**17
+    "max_samples": 1000,
+    "overwrite_cache": True,
+    "preprocessing_num_workers": 16,  # 16 = max
+    ### output
+    "output_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo",
+    "logging_steps": 10,
+    "save_steps": 500,
+    "plot_loss": True,
+    "overwrite_output_dir": True,
+    "include_effective_tokens_per_second": True,
+    ### train
+    "per_device_train_batch_size": 1,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 5.0e-6,
+    "num_train_epochs": 3.0,
+    "lr_scheduler_type": "cosine",
+    "warmup_ratio": 0.1,
+    "bf16": True,
+    "ddp_timeout": 180000000,
+    ### eval
+    "val_size": 0.1,
+    "per_device_eval_batch_size": 1,
+    "eval_strategy": "steps",
+    "eval_steps": 500,
+}
+with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_dpo_train.yaml", "w") as f:
+    yaml.dump(sft_config, f)
+
+dpo_merge_config = {
+    ### model
+    "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
+    "adapter_name_or_path": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo",
+    "template": "qwen2_vl",
+    "finetuning_type": "lora",
+    "trust_remote_code": True,
+    ### export
+    "export_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo-merged",
+    "export_size": 2,
+    "export_device": "cpu",
+    "export_legacy_format": False,
+}  ## Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_dpo_merge.yaml", "w") as f:
+    yaml.dump(dpo_merge_config, f)
 
 # -----------------------------------------------------------------------------
 
@@ -748,7 +925,7 @@ def run_cls():  # noqa: C901
             elif distributed and hasattr(loader_train.sampler, "set_epoch"):
                 loader_train.sampler.set_epoch(epoch)
 
-            train_metrics = train_one_epoch(
+            train_metrics = train_one_epoch_cls(
                 epoch,
                 model,
                 loader_train,
@@ -774,7 +951,7 @@ def run_cls():  # noqa: C901
                 utils.distribute_bn(model, world_size, dist_bn == "reduce")
 
             if loader_eval is not None:
-                eval_metrics = validate(
+                eval_metrics = validate_cls(
                     model,
                     loader_eval,
                     validate_loss_fn,
@@ -789,7 +966,7 @@ def run_cls():  # noqa: C901
                     if distributed and dist_bn in ("broadcast", "reduce"):
                         utils.distribute_bn(model_ema, world_size, dist_bn == "reduce")
 
-                    ema_eval_metrics = validate(
+                    ema_eval_metrics = validate_cls(
                         model_ema,
                         loader_eval,
                         validate_loss_fn,
@@ -857,7 +1034,7 @@ def run_cls():  # noqa: C901
         destroy_process_group()
 
 
-def train_one_epoch(  # noqa: C901
+def train_one_epoch_cls(  # noqa: C901
     epoch,
     model,
     loader,
@@ -1015,7 +1192,7 @@ def train_one_epoch(  # noqa: C901
     return OrderedDict([("loss", losses_m.avg)])
 
 
-def validate(
+def validate_cls(
     model,
     loader,
     loss_fn,
@@ -1111,12 +1288,12 @@ def main(cls: bool, sft: bool, dpo: bool):
     if cls:
         run_cls()
     if sft:
-        os.chdir("/LLaMA-Factory")
+        os.chdir(TRAIN_REPO_PATH)
         _exec_subprocess(
             [
                 "cp",
-                f"/{DATA_VOLUME}/train/data.json",
-                "data/data.json",
+                f"{DATA_VOL_PATH}/train/sft.json",
+                "data/sft.json",
             ]
         )
         _exec_subprocess(
@@ -1128,18 +1305,18 @@ def main(cls: bool, sft: bool, dpo: bool):
         )
         checkpoint_folder = str(
             max(
-                list((Path(f"/{RUNS_VOLUME}/qwen2-vl-7b-instruct-full-sft").glob("checkpoint-*"))),
+                list((Path(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-full-sft").glob("checkpoint-*"))),
                 key=lambda x: int(x.name.split("-")[-1]),
             )
         )
         push_to_hub(checkpoint_folder, "qwen2-vl-7b-instruct-full-sft")
     if dpo:
-        os.chdir("/LLaMA-Factory")
+        os.chdir(TRAIN_REPO_PATH)
         _exec_subprocess(
             [
                 "cp",
-                f"/{DATA_VOLUME}/train/data.json",
-                "data/data.json",
+                f"{DATA_VOL_PATH}/train/dpo.json",
+                "data/dpo.json",
             ]
         )
         _exec_subprocess(
@@ -1149,7 +1326,7 @@ def main(cls: bool, sft: bool, dpo: bool):
                 "qwen2vl_lora_dpo_train.yaml",
             ]
         )
-        push_to_hub(f"/{RUNS_VOLUME}/qwen2-vl-7b-instruct-lora-dpo", "qwen2-vl-7b-instruct-lora-dpo")
+        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo", "qwen2-vl-7b-instruct-lora-dpo")
         _exec_subprocess(
             [
                 "llamafactory-cli",
@@ -1157,7 +1334,7 @@ def main(cls: bool, sft: bool, dpo: bool):
                 "qwen2vl_lora_dpo_merge.yaml",
             ]
         )
-        push_to_hub(f"/{RUNS_VOLUME}/qwen2-vl-7b-instruct-lora-dpo-merged", "qwen2-vl-7b-instruct-lora-dpo-merged")
+        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo-merged", "qwen2-vl-7b-instruct-lora-dpo-merged")
 
     # TODO: use to create tokens and test model
     # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")

@@ -792,7 +792,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 )
             ]
 
-            output_path = Path(f"{DATA_VOL_PATH}/{split}/data.json")
+            output_path = Path(f"{DATA_VOL_PATH}/{split}/sft.json")
             with open(output_path, "w") as f:
                 json.dump(json_output, f, indent=4)
             print(f"Wrote to {output_path}")
