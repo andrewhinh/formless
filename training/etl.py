@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from huggingface_hub import login
 from imagehash import phash
 from more_itertools import chunked
-from PIL import Image
+from PIL import Image, ImageFilter
 from pydantic import Field
 from pyspark.ml.feature import MinHashLSH
 from pyspark.ml.linalg import Vectors, VectorUDT
@@ -92,7 +92,7 @@ Return the quality of the handwriting as a number between 1 and 3.
 # sft training data config
 
 FAST_RATER = "hf_hub:andrewhinh/resnet152-cls"
-BS = 2048  # max on RTX 3090
+CLS_RUN_BS = 2048  # max on RTX 3090
 
 ## imports
 
@@ -141,6 +141,10 @@ N_SAMPLES_PER_SPLIT_SFT = {
     "valid": 1000.0,
     "test": 1000.0,
 }
+
+## stitch
+STITCH_BS_MAX = 128  # imgs
+ROTATE_MAX = 10  # degrees
 
 # -----------------------------------------------------------------------------
 
@@ -373,7 +377,7 @@ def render_ink(
     secrets=SECRETS,
     timeout=ETL_TIMEOUT,
 )
-def extract_ink_metadata(input_path: Path, save_path: Path) -> dict[Path, str]:
+def extract_ink_metadata(input_path: Path) -> dict[Path, str]:
     """
     Extract ink metadata from inkml file and render ink as image.
     """
@@ -399,6 +403,7 @@ def extract_ink_metadata(input_path: Path, save_path: Path) -> dict[Path, str]:
 
     # render ink and save
     img = render_ink(ink)
+    save_path = input_path.parent / (input_path.stem + ".png")
     if save_path.exists():
         save_path.unlink()
     img.save(save_path)
@@ -498,7 +503,8 @@ def classify_ink(img_paths: list[Path]) -> list[int]:
     predictions = outputs.softmax(-1).topk(TOPK, dim=-1)
     writing_qualities = [int(labels[idx[0]]) for idx in predictions.indices]
 
-    for img_path, writing_quality in zip(img_paths, writing_qualities, strict=False):
+    ## for timm
+    for img_path, writing_quality in zip(img_paths, writing_qualities, strict=True):
         output_dir = img_path.parent / str(writing_quality)
         output_dir.mkdir(exist_ok=True)
         Image.open(img_path).convert("RGB").save(output_dir / img_path.name)
@@ -522,31 +528,79 @@ def compute_minhash(phash_str):
     return [int(hash_value) for hash_value in m.hashvalues]  # Convert uint64 to int
 
 
-def generate_json(row):
+def random_chunked(iterable, max_size):
     """
-    Generate JSON entry for each row in the DataFrame.
+    Yields chunks from the iterable, where each chunk is of a random size between 1 and max_size (inclusive).
     """
-    return json.dumps(
-        {
-            "messages": [
-                {
-                    "content": DEFAULT_SYSTEM_PROMPT,
-                    "role": "system",
-                },
-                {
-                    "content": f"<image>{DEFAULT_QUESTION}",
-                    "role": "user",
-                },
-                {
-                    "content": row.label,
-                    "role": "assistant",
-                },
-            ],
-            "images": [
-                row.img_path,
-            ],
-        }
-    )
+    items = list(iterable)
+    index = 0
+    while index < len(items):
+        chunk_size = random.randint(1, max_size)
+        yield items[index : index + chunk_size]
+        index += chunk_size
+
+
+@app.function(
+    image=IMAGE,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def stitch_imgs(img_paths: list[Path]) -> Path:
+    """
+    Given a list of image file paths, stitch them together into a grid
+    so that the final image is the same size as one of the input images.
+
+    Each image is resized to fit into its cell.
+    """
+    images = [Image.open(path) for path in img_paths]
+    w, h = images[0].size
+
+    num_images = len(images)
+    grid_cols = math.ceil(math.sqrt(num_images))
+    grid_rows = math.ceil(num_images / grid_cols)
+
+    tile_width = w // grid_cols
+    tile_height = h // grid_rows
+
+    ## use RGBA to handle transparency (default: white)
+    stitched_image = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+
+    for i, img in enumerate(images):
+        img_resized = img.resize((tile_width, tile_height), Image.ANTIALIAS)
+
+        ### rotate
+        angle = random.uniform(-ROTATE_MAX, ROTATE_MAX)
+        img_rotated = img_resized.rotate(angle, resample=Image.BICUBIC, expand=True)
+
+        ### gaussian blur
+        img_blurred = img_rotated.filter(ImageFilter.GaussianBlur(radius=random.uniform(0, 1)))
+
+        ### rotation with expand=True changes the size
+        ### -> calculate pos to center transformed image
+        ### within its grid cell, then add rand offset.
+        w_trans, h_trans = img_blurred.size
+        base_offset_x = (tile_width - w_trans) // 2
+        base_offset_y = (tile_height - h_trans) // 2
+        rand_offset_x = random.randint(-tile_width // 8, tile_width // 8)
+        rand_offset_y = random.randint(-tile_height // 8, tile_height // 8)
+        offset_x = base_offset_x + rand_offset_x
+        offset_y = base_offset_y + rand_offset_y
+
+        col = i % grid_cols
+        row = i // grid_cols
+        cell_x = col * tile_width
+        cell_y = row * tile_height
+        paste_x = cell_x + offset_x
+        paste_y = cell_y + offset_y
+
+        ### paste with alpha channel (= mask) to handle transparency
+        stitched_image.paste(img_blurred, (paste_x, paste_y), img_blurred)
+
+    save_path = img_paths[0].parent / "_".join([img_path.name for img_path in img_paths])
+    final_image = stitched_image.convert("RGB")
+    final_image.save(save_path)
+    return save_path
 
 
 # -----------------------------------------------------------------------------
@@ -581,25 +635,21 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         print(f"Creating new dataframe from {DATA_VOL_PATH}")
         for split in SPLITS:
             # extract ink metadata
-            filenames = list(Path(f"{DATA_VOL_PATH}/{split}").glob("*.inkml"))
-            save_paths = [Path(f"{DATA_VOL_PATH}/{split}/{filename.stem}.png") for filename in filenames]
+            ink_paths = list(Path(f"{DATA_VOL_PATH}/{split}").glob("*.inkml"))
             if modal.is_local():
                 split_stats = list(
                     tqdm(
                         thread_map(
                             extract_ink_metadata.local,
-                            filenames,
-                            save_paths,
+                            ink_paths,
                             max_workers=multiprocessing.cpu_count(),
                         ),
                         desc=split,
-                        total=len(filenames),
+                        total=len(ink_paths),
                     )
                 )
             else:
-                split_stats = extract_ink_metadata.starmap(
-                    (filename, save_path) for filename, save_path in zip(filenames, save_paths, strict=True)
-                )
+                split_stats = extract_ink_metadata.map(ink_paths)
 
             # write to df
             split_df = spark.createDataFrame(
@@ -623,7 +673,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
     if cls:
         # run model to assign writing quality to random subset
         df = df.withColumn("writing_quality", lit(None).cast(IntegerType()))
-        all_updates = []
+        df_parts = []
         for split in SPLITS:
             ## get random subset of split data
             split_df = df.filter(col("split") == split)
@@ -646,18 +696,18 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
             ## save to write later
             new_schema = ["img_path", "split", "writing_quality"]
-            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
+            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=True)]
             updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
-            all_updates.append(updates_df)
+            df_parts.append(updates_df)
             print(f"Labeled {N_SAMPLES_PER_SPLIT_CLS[split]} samples for split {split}")
 
         ## write to df
-        final_updates_df = all_updates[0]
-        for update_df in all_updates[1:]:
-            final_updates_df = final_updates_df.unionByName(update_df)
+        write_df = df_parts[0]
+        for update_df in df_parts[1:]:
+            write_df = write_df.unionByName(update_df)
         df = (
             df.alias("main")
-            .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
+            .join(write_df.alias("upd"), on=["img_path", "split"], how="left")
             .select(
                 col("main.img_path"),
                 col("main.label"),
@@ -669,7 +719,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
     if sft:
         # run trained classifier on df
-        all_updates = []
+        df_parts = []
         for split in SPLITS:
             ## get non-labeled samples
             split_df = df.filter(col("split") == split)
@@ -680,7 +730,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             if not img_paths:
                 continue
             if modal.is_local():
-                img_batches = list(chunked(img_paths, BS))
+                img_batches = list(chunked(img_paths, CLS_RUN_BS))
                 writing_qualities = list(
                     tqdm(
                         chain.from_iterable(classify_ink.local(p) for p in img_batches),
@@ -693,18 +743,18 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
             ## save to write later
             new_schema = ["img_path", "split", "writing_quality"]
-            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=False)]
+            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=True)]
             updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
-            all_updates.append(updates_df)
+            df_parts.append(updates_df)
 
         ## write to df
-        if all_updates:
-            final_updates_df = all_updates[0]
-            for update_df in all_updates[1:]:
-                final_updates_df = final_updates_df.unionByName(update_df)
+        if df_parts:
+            write_df = df_parts[0]
+            for update_df in df_parts[1:]:
+                write_df = write_df.unionByName(update_df)
             df = (
                 df.alias("main")
-                .join(final_updates_df.alias("upd"), on=["img_path", "split"], how="left")
+                .join(write_df.alias("upd"), on=["img_path", "split"], how="left")
                 .select(
                     col("main.img_path"),
                     col("main.label"),
@@ -715,17 +765,17 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             df.write.mode("overwrite").parquet(PARQUET_FILENAME)
 
         # filter to only get data with writing quality == 1
-        filtered_dfs = []
+        filter_df_parts = []
         for split in SPLITS:
             split_df = df.filter(col("split") == split)
             split_filter_df = split_df.filter(split_df.writing_quality == 1)
-            filtered_dfs.append(split_filter_df)
-        filter_df = filtered_dfs[0]
-        for filtered_df in filtered_dfs[1:]:
+            filter_df_parts.append(split_filter_df)
+        filter_df = filter_df_parts[0]
+        for filtered_df in filter_df_parts[1:]:
             filter_df = filter_df.unionByName(filtered_df)
 
         # deduplication
-        dedup_dfs = []
+        dedup_df_parts = []
 
         ## compute minhash vec
         compute_phash_udf = udf(lambda img_path: str(phash(Image.open(img_path), hash_size=HASH_SZ)), StringType())
@@ -736,7 +786,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         filter_df = filter_df.withColumn("minhash", compute_minhash_udf(col("phash")))
         filter_df = filter_df.withColumn("minhash_vec", vector_udf(col("minhash")))
 
-        ## dedup with lsh and randomly sample
+        ## dedup with lsh
         for split in SPLITS:
             split_df = filter_df.filter(col("split") == split)
             lsh = MinHashLSH(inputCol="minhash_vec", outputCol="hashes", numHashTables=NUM_PERM)
@@ -749,53 +799,98 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             )
 
             split_dedup_df = deduped_df.drop("phash", "minhash", "minhash_vec", "hashes")
-            split_dedup_df = split_dedup_df.sample(
-                False, N_SAMPLES_PER_SPLIT_SFT[split] / split_cts[split], float(RANDOM_SEED)
-            )
-            dedup_dfs.append(split_dedup_df)
-            print(f"Collected {N_SAMPLES_PER_SPLIT_SFT[split]} samples for split {split}")
-        final_dedup_df = dedup_dfs[0]
-        for dedup_df in dedup_dfs[1:]:
-            final_dedup_df = final_dedup_df.unionByName(dedup_df)
+            dedup_df_parts.append(split_dedup_df)
+        dedup_df = dedup_df_parts[0]
+        for deduped_df in dedup_df_parts[1:]:
+            dedup_df = dedup_df.unionByName(deduped_df)
+
+        # randomly stitch samples together
+        final_img_paths = []
+        final_labels = []
+        for split in SPLITS:
+            split_df = dedup_df.filter(col("split") == split)
+            img_paths = [row.img_path for row in split_df.collect()]
+            labels = [row.label for row in split_df.collect()]
+
+            ## create randomly-sized batches
+            pairs = list(zip(img_paths, labels, strict=True))
+            batches = list(random_chunked(pairs, STITCH_BS_MAX))
+
+            ## batch -> (list_of_img_paths, combined_label) tuples.
+            def process_batch(batch: list[tuple[str, str]]) -> tuple[list[Path], str]:
+                batch_img_paths, batch_labels = zip(*batch, strict=True)
+                return list(batch_img_paths), "".join(batch_labels)
+
+            batches_data = [process_batch(batch) for batch in batches]
+
+            if modal.is_local():
+
+                def stitch_batch(data: tuple[list[Path], str]) -> tuple[str, str]:
+                    paths, combined_label = data
+                    stitched_path = stitch_imgs.local(paths)
+                    return stitched_path, combined_label
+
+                stitched_batches = list(
+                    tqdm(
+                        thread_map(
+                            stitch_batch,
+                            batches_data,
+                            max_workers=multiprocessing.cpu_count(),
+                            desc=split,
+                        ),
+                        total=len(batches_data),
+                    )
+                )
+            else:
+                paths_list = [data[0] for data in batches_data]
+                combined_labels = [data[1] for data in batches_data]
+                stitched_img_paths = stitch_imgs.map(paths_list)
+                stitched_batches = list(zip(stitched_img_paths, combined_labels, strict=True))
+
+            ## unroll
+            stitched_img_paths, combined_labels = zip(*stitched_batches, strict=True)
+            stitched_img_paths = list(stitched_img_paths)
+            combined_labels = list(combined_labels)
+
+            ## randomly sample
+            random.shuffle(stitched_img_paths)
+            random.shuffle(combined_labels)
+            stitched_img_paths = stitched_img_paths[: N_SAMPLES_PER_SPLIT_SFT[split]]
+            combined_labels = combined_labels[: N_SAMPLES_PER_SPLIT_SFT[split]]
+
+            final_img_paths.extend(stitched_img_paths)
+            final_labels.extend(combined_labels)
 
         # write to json
-        for split in SPLITS:
-            split_df = df.filter(col("split") == split)
-
-            data = split_df.select("label", "img_path").collect()
-            labels = [row.label for row in data]
-            img_paths = [row.img_path for row in data]
-            json_output = [
-                {
-                    "messages": [
-                        {
-                            "content": DEFAULT_SYSTEM_PROMPT,
-                            "role": "system",
-                        },
-                        {
-                            "content": f"<image>{DEFAULT_QUESTION}",
-                            "role": "user",
-                        },
-                        {
-                            "content": label,
-                            "role": "assistant",
-                        },
-                    ],
-                    "images": [
-                        img_path,
-                    ],
-                }
-                for label, img_path in zip(
-                    labels,
-                    img_paths,
-                    strict=False,
-                )
-            ]
-
-            output_path = Path(f"{DATA_VOL_PATH}/{split}/sft.json")
-            with open(output_path, "w") as f:
-                json.dump(json_output, f, indent=4)
-            print(f"Wrote to {output_path}")
+        json_output = [
+            {
+                "messages": [
+                    {
+                        "content": DEFAULT_SYSTEM_PROMPT,
+                        "role": "system",
+                    },
+                    {
+                        "content": f"<image>{DEFAULT_QUESTION}",
+                        "role": "user",
+                    },
+                    {
+                        "content": label,
+                        "role": "assistant",
+                    },
+                ],
+                "images": [
+                    img_path,
+                ],
+            }
+            for label, img_path in zip(
+                final_labels,
+                final_img_paths,
+                strict=True,
+            )
+        ]
+        output_path = Path(f"{DATA_VOL_PATH}/sft.json")
+        with open(output_path, "w") as f:
+            json.dump(json_output, f, indent=4)
     if dpo:
         # load df
 

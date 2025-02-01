@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import random
+import sys
 import time
 from collections import OrderedDict
 from contextlib import suppress
@@ -38,6 +39,9 @@ from timm.utils import ApexScaler, NativeScaler
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
+sys.path.append(project_root)
 
 from utils import DATA_VOLUME, GPU_IMAGE, IN_PROD, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
 
@@ -360,23 +364,24 @@ else:
 sft_config = {
     ### model
     "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
+    "image_resolution": 262144,
+    "video_resolution": 16384,
     "trust_remote_code": True,
     ### method
     "stage": "sft",
     "do_train": True,
-    "finetuning_type": "full",
-    "freeze_vision_tower": False,
-    "train_mm_proj_only": False,
-    "deepspeed": "ds_z3_config.json",
+    "finetuning_type": "lora",
+    "lora_rank": 8,
+    "lora_target": "all",
     ### dataset
     "dataset": "sft",
     "template": "qwen2_vl",
-    "cutoff_len": 131072,  # 2**17
+    "cutoff_len": 2048,  # 131072 = 2**17
     "max_samples": 1000,
     "overwrite_cache": True,
     "preprocessing_num_workers": 16,  # 16 = max
     ### output
-    "output_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-full-sft",
+    "output_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft",
     "logging_steps": 10,
     "save_steps": 500,
     "plot_loss": True,
@@ -397,8 +402,25 @@ sft_config = {
     "eval_strategy": "steps",
     "eval_steps": 500,
 }
-with open(f"{TRAIN_REPO_PATH}/qwen2vl_full_sft.yaml", "w") as f:
+with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_sft_train.yaml", "w") as f:
     yaml.dump(sft_config, f)
+
+sft_merge_config = {
+    ### model
+    "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
+    "adapter_name_or_path": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft",
+    "template": "qwen2_vl",
+    "finetuning_type": "lora",
+    "trust_remote_code": True,
+    ### export
+    "export_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft-merged",
+    "export_size": 2,
+    "export_device": "cpu",
+    "export_legacy_format": False,
+}  ## Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_sft_merge.yaml", "w") as f:
+    yaml.dump(sft_merge_config, f)
+
 
 # -----------------------------------------------------------------------------
 
@@ -1292,7 +1314,7 @@ def main(cls: bool, sft: bool, dpo: bool):
         _exec_subprocess(
             [
                 "cp",
-                f"{DATA_VOL_PATH}/train/sft.json",
+                f"{DATA_VOL_PATH}/sft.json",
                 "data/sft.json",
             ]
         )
@@ -1300,22 +1322,31 @@ def main(cls: bool, sft: bool, dpo: bool):
             [
                 "llamafactory-cli",
                 "train",
-                "qwen2vl_full_sft.yaml",
+                "qwen2vl_lora_sft_train.yaml",
             ]
         )
-        checkpoint_folder = str(
-            max(
-                list((Path(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-full-sft").glob("checkpoint-*"))),
-                key=lambda x: int(x.name.split("-")[-1]),
-            )
+        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft", "qwen2-vl-7b-instruct-lora-sft")
+        _exec_subprocess(
+            [
+                "llamafactory-cli",
+                "export",
+                "qwen2vl_lora_sft_merge.yaml",
+            ]
         )
-        push_to_hub(checkpoint_folder, "qwen2-vl-7b-instruct-full-sft")
+        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft-merged", "qwen2-vl-7b-instruct-lora-sft-merged")
+        # checkpoint_folder = str(
+        #     max(
+        #         list((Path(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-full-sft").glob("checkpoint-*"))),
+        #         key=lambda x: int(x.name.split("-")[-1]),
+        #     )
+        # )
+        # push_to_hub(checkpoint_folder, "qwen2-vl-7b-instruct-full-sft")
     if dpo:
         os.chdir(TRAIN_REPO_PATH)
         _exec_subprocess(
             [
                 "cp",
-                f"{DATA_VOL_PATH}/train/dpo.json",
+                f"{DATA_VOL_PATH}/dpo.json",
                 "data/dpo.json",
             ]
         )
