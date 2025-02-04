@@ -30,7 +30,6 @@ dependencies = [
     "python-fasthtml==0.6.10",
     "python-magic>=0.4.27",
     "requests==2.32.3",
-    "s3fs>=2024.12.0",
     "safetensors>=0.5.1",
     "sentencepiece>=0.2.0",
     "simpleicons==7.21.0",
@@ -44,11 +43,14 @@ dependencies = [
     "torchao>=0.7.0",
     "torchvision>=0.20.1",
     "tqdm==4.67.1",
-    "transformers>=4.47.1",
     "validators==0.34.0",
     "vllm==0.6.5",
     "wandb>=0.19.4",
     "wheel==0.41.2",
+    "transformers>=4.48.2",
+    "autoawq>=0.2.7.post3",
+    "s3fs>=2024.9.0",
+    "jiwer>=3.1.0",
 ]
 
 [project.scripts]

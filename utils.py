@@ -10,7 +10,7 @@ DEFAULT_IMG_URL = "https://formless-data.s3.us-west-1.amazonaws.com/train/00001d
 PARENT_PATH = Path(__file__).parent
 DEFAULT_IMG_PATH = PARENT_PATH / "api" / "eg.png"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
-DEFAULT_QUESTION = "What is the content of this image in a paragraph?"
+DEFAULT_QUESTION = "What is the content of this image?"
 
 # Modal
 IN_PROD = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"

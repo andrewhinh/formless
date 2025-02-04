@@ -1,12 +1,15 @@
 """ETL for data to train classifiers and VLMs."""
 
 import base64
+import hashlib
 import json
 import logging
 import math
 import multiprocessing
 import os
 import random
+import re
+from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -15,9 +18,11 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import cairo
+import jiwer
 import modal
 import numpy as np
 import torch
+import yaml
 from datasketch import MinHash
 from dotenv import load_dotenv
 from huggingface_hub import login
@@ -52,22 +57,47 @@ from utils import (
     VOLUME_CONFIG,
 )
 
+# setup
+TABLE_BS = 65536  # so no memory overload when pulling data from df
+RANDOM_SEED = 42
+logging.getLogger("timm").setLevel(
+    logging.WARNING
+)  # disable "Safe alternative available for 'pytorch_model.bin' (as 'model.safetensors'). Loading weights using safetensors.""
+spark = (
+    SparkSession.builder.config("spark.executor.memory", "20G")
+    .config("spark.driver.memory", "20G")
+    .config("spark.driver.maxResultSize", "1G")
+    .config("spark.sql.shuffle.partitions", "300")
+    .config("spark.worker.cleanup.enabled", "true")
+    .config("spark.worker.cleanup.interval", "1800")
+    .config("spark.worker.cleanup.appDataTtl", "86400")
+    .config("spark.local.dir", "/tmp/spark-temp")  # noqa: S108
+    .config("spark.dynamicAllocation.enabled", "true")
+    .config("spark.dynamicAllocation.minExecutors", "1")
+    .config("spark.dynamicAllocation.maxExecutors", "10")
+    .config("spark.sql.adaptive.enabled", "true")
+    .config("spark.sql.parquet.compression.codec", "snappy")
+    .config("spark.sql.autoBroadcastJoinThreshold", -1)
+    .getOrCreate()
+)
+random.seed(RANDOM_SEED)
+load_dotenv(".env" if IN_PROD else ".env.dev")
+
 # -----------------------------------------------------------------------------
 
 # classifier training data config
 
-RANDOM_SEED = 42
 SPLITS = ["train", "valid", "test"]
 N_SAMPLES_PER_SPLIT_CLS = {
-    "train": 1000.0,
+    "train": 800.0,
     "valid": 100.0,
     "test": 100.0,
 }
-QUALITIES = ["1", "2", "3"]
+CLASSES = ["1", "2", "3"]
 
-SLOW_RATER = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained model or ckpt
-SLOW_RATER_TOKENIZER = "Qwen/Qwen2-VL-2B-Instruct-AWQ"  # pretrained tokenizer
-QUANTIZATION = "awq_marlin"
+SLOW_RATER = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained model or ckpt
+SLOW_RATER_TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained tokenizer
+QUANTIZATION = "awq_marlin"  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
 ENFORCE_EAGER = False
 MAX_NUM_SEQS = 1
@@ -78,13 +108,15 @@ TOP_P = 0.001
 REPEATION_PENALTY = 1.05
 MAX_TOKENS = 5
 STOP_TOKEN_IDS = []
-PROMPT = """
-You are given an image of a math expression and its corresponding annotation.
-Determine the quality of the handwriting in the image using the additive 3-point scoring system described below. Points are accumulated based on the satisfaction of each criterion:
-1) Add 1 point if the writing is very difficult to read.
-2) Add another point if the writing is partially unreadable.
-3) Add a third point if the writing is completely clear and legible.
-Return the quality of the handwriting as a number between 1 and 3.
+DIFFICULTY_PROMPT = """
+You are given an image of a handwritten math expression and its corresponding annotation.
+Determine the grade level of the expression in the image using the additive 3-point scoring system described below.
+Points are accumulated based on the satisfaction of each criterion:
+1) Add 1 point if the expression is something that an elementary to middle school student could understand.
+2) Add another point if the expression is something that a high school student could understand.
+3) Add a third point if the expression is something that an undergrad to grad student could understand.
+Return the difficulty of the expression as a number between 1 and 3 where
+1 is the easiest and 3 is the most difficult.
 """
 
 # -----------------------------------------------------------------------------
@@ -137,39 +169,37 @@ NUM_PERM = 64  # larger = high acc but high mem usage
 HASH_SZ = 8  # larger = more accurate but slower
 THRESHOLD = 0.2  # larger = less duplicates
 N_SAMPLES_PER_SPLIT_SFT = {
-    "train": 10000.0,
-    "valid": 1000.0,
-    "test": 1000.0,
-}
+    "train": 8000,
+    "valid": 1000,
+    "test": 1000,
+}  # only train data will be written to json, valid/test will be used for eval
 
 ## stitch
-STITCH_BS_MAX = 128  # imgs
+STITCH_BS_MAX = 256  # imgs
 ROTATE_MAX = 10  # degrees
+
+## json paths
+if modal.is_local():
+    DATA_VOL_PATH = str(PARENT_PATH / "training" / "artifacts" / "mathwriting-2024")
+    if not os.path.exists(DATA_VOL_PATH):
+        raise Exception(f"""
+{DATA_VOL_PATH} does not exist.
+""")
+else:
+    DATA_VOL_PATH = f"/{DATA_VOLUME}"
+SFT_TRAIN_JSON = Path(f"{DATA_VOL_PATH}/sft_train.json")
+SFT_VAL_JSON = Path(f"{DATA_VOL_PATH}/sft_valid.json")
+SFT_TEST_JSON = Path(f"{DATA_VOL_PATH}/sft_test.json")
 
 # -----------------------------------------------------------------------------
 
-# setup
-logging.getLogger("timm").setLevel(
-    logging.WARNING
-)  # disable "Safe alternative available for 'pytorch_model.bin' (as 'model.safetensors'). Loading weights using safetensors.""
-spark = (
-    SparkSession.builder.config("spark.executor.memory", "20G")
-    .config("spark.driver.memory", "20G")
-    .config("spark.driver.maxResultSize", "1G")
-    .config("spark.sql.shuffle.partitions", "300")
-    .config("spark.worker.cleanup.enabled", "true")
-    .config("spark.worker.cleanup.interval", "1800")
-    .config("spark.worker.cleanup.appDataTtl", "86400")
-    .config("spark.local.dir", "/tmp/spark-temp")  # noqa: S108
-    .config("spark.dynamicAllocation.enabled", "true")
-    .config("spark.dynamicAllocation.minExecutors", "1")
-    .config("spark.dynamicAllocation.maxExecutors", "10")
-    .config("spark.sql.adaptive.enabled", "true")
-    .config("spark.sql.parquet.compression.codec", "snappy")
-    .getOrCreate()
-)
-random.seed(RANDOM_SEED)
-load_dotenv(".env" if IN_PROD else ".env.dev")
+# dpo training data config
+
+SLOW_RUNNER = "andrewhinh/qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained model or ckpt
+SLOW_RUNNER_TOKENIZER = "andrewhinh/qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained tokenizer
+DPO_TRAIN_JSON = Path(f"{DATA_VOL_PATH}/dpo_train.json")
+
+# -----------------------------------------------------------------------------
 
 
 ## container startup fn
@@ -178,7 +208,7 @@ def download_models():
 
     login(token=os.getenv("HF_TOKEN"), new_session=False)
 
-    for model in [SLOW_RATER, SLOW_RATER_TOKENIZER, FAST_RATER.split("hf_hub:")[1]]:
+    for model in [SLOW_RATER, SLOW_RATER_TOKENIZER, FAST_RATER.split("hf_hub:")[1], SLOW_RUNNER, SLOW_RUNNER_TOKENIZER]:
         if not os.path.exists(model):
             snapshot_download(
                 model,
@@ -420,22 +450,21 @@ def extract_ink_metadata(input_path: Path) -> dict[Path, str]:
 )
 def analyze_ink(img_path: Path) -> int:
     """
-    Analyze ink and return writing quality.
+    Analyze ink and return score.
     """
     with open(img_path, "rb") as image_file:
         base64_img = base64.b64encode(image_file.read()).decode("utf-8")
     img_url = f"data:image/jpeg;base64,{base64_img}"
     messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": DIFFICULTY_PROMPT},
+                {"type": "image_url", "image_url": {"url": img_url}},
             ],
         },
     ]
-    if img_url is not None:
-        messages[1]["content"].append({"type": "image_url", "image_url": {"url": img_url}})
 
     global llm
     global sampling_params
@@ -460,17 +489,17 @@ def analyze_ink(img_path: Path) -> int:
             repetition_penalty=REPEATION_PENALTY,
             max_tokens=MAX_TOKENS,
             stop_token_ids=STOP_TOKEN_IDS,
-            guided_decoding=GuidedDecodingParams(choice=[1, 2, 3]),
+            guided_decoding=GuidedDecodingParams(choice=[int(cls) for cls in CLASSES]),
         )
     outputs = llm.chat(messages, sampling_params)
     generated_text = outputs[0].outputs[0].text.strip()
-    writing_quality = int(generated_text)
+    score = int(generated_text)
 
     img = Image.open(img_path).convert("RGB")
-    if not os.path.exists(img_path.parent / str(writing_quality)):
-        os.mkdir(img_path.parent / str(writing_quality))
-    img.save(img_path.parent / str(writing_quality) / img_path.name)
-    return writing_quality
+    if not os.path.exists(img_path.parent / str(score)):
+        os.mkdir(img_path.parent / str(score))
+    img.save(img_path.parent / str(score) / img_path.name)
+    return score
 
 
 @app.function(
@@ -481,7 +510,7 @@ def analyze_ink(img_path: Path) -> int:
 )
 def classify_ink(img_paths: list[Path]) -> list[int]:
     """
-    Classify ink and return writing quality.
+    Classify ink and return score.
     """
     global transforms, amp_autocast, classifier
     if "classifier" not in globals():
@@ -501,15 +530,9 @@ def classify_ink(img_paths: list[Path]) -> list[int]:
 
     labels = classifier.pretrained_cfg["label_names"]
     predictions = outputs.softmax(-1).topk(TOPK, dim=-1)
-    writing_qualities = [int(labels[idx[0]]) for idx in predictions.indices]
+    scores = [int(labels[idx[0]]) for idx in predictions.indices]
 
-    ## for timm
-    for img_path, writing_quality in zip(img_paths, writing_qualities, strict=True):
-        output_dir = img_path.parent / str(writing_quality)
-        output_dir.mkdir(exist_ok=True)
-        Image.open(img_path).convert("RGB").save(output_dir / img_path.name)
-
-    return writing_qualities
+    return scores
 
 
 def compute_minhash(phash_str):
@@ -528,18 +551,6 @@ def compute_minhash(phash_str):
     return [int(hash_value) for hash_value in m.hashvalues]  # Convert uint64 to int
 
 
-def random_chunked(iterable, max_size):
-    """
-    Yields chunks from the iterable, where each chunk is of a random size between 1 and max_size (inclusive).
-    """
-    items = list(iterable)
-    index = 0
-    while index < len(items):
-        chunk_size = random.randint(1, max_size)
-        yield items[index : index + chunk_size]
-        index += chunk_size
-
-
 @app.function(
     image=IMAGE,
     volumes=VOLUME_CONFIG,
@@ -553,7 +564,7 @@ def stitch_imgs(img_paths: list[Path]) -> Path:
 
     Each image is resized to fit into its cell.
     """
-    images = [Image.open(path) for path in img_paths]
+    images = [Image.open(path).convert("RGBA") for path in img_paths]
     w, h = images[0].size
 
     num_images = len(images)
@@ -567,7 +578,7 @@ def stitch_imgs(img_paths: list[Path]) -> Path:
     stitched_image = Image.new("RGBA", (w, h), (255, 255, 255, 255))
 
     for i, img in enumerate(images):
-        img_resized = img.resize((tile_width, tile_height), Image.ANTIALIAS)
+        img_resized = img.resize((tile_width, tile_height), Image.LANCZOS)
 
         ### rotate
         angle = random.uniform(-ROTATE_MAX, ROTATE_MAX)
@@ -597,10 +608,232 @@ def stitch_imgs(img_paths: list[Path]) -> Path:
         ### paste with alpha channel (= mask) to handle transparency
         stitched_image.paste(img_blurred, (paste_x, paste_y), img_blurred)
 
-    save_path = img_paths[0].parent / "_".join([img_path.name for img_path in img_paths])
+    unique_string = "".join(sorted([str(path) for path in img_paths]))
+    hash_digest = hashlib.md5(unique_string.encode("utf-8")).hexdigest()  # noqa: S324
+    save_path = img_paths[0].parent / f"{hash_digest}.png"
     final_image = stitched_image.convert("RGB")
     final_image.save(save_path)
     return save_path
+
+
+def write_sft_json(json_path: Path, img_paths: list, labels: list):
+    with open(json_path, "w") as f:
+        json.dump(
+            [
+                {
+                    "conversations": [
+                        {
+                            "from": "human",
+                            "value": f"<image>{DEFAULT_QUESTION}",
+                        },
+                        {
+                            "from": "gpt",
+                            "value": label,
+                        },
+                    ],
+                    "images": [
+                        str(img_path),
+                    ],
+                }
+                for img_path, label in zip(
+                    img_paths,
+                    labels,
+                    strict=True,
+                )
+            ],
+            f,
+            indent=4,
+        )
+
+
+def tokenize_expression(s: str) -> list[str]:
+    r"""Transform a Latex math string into a list of tokens.
+
+    Tokens are strings that are meaningful in the context of Latex
+    e.g. '1', r'\alpha', r'\frac'.
+
+    Args:
+        s: unicode input string (ex: r"\frac{1}{2}")
+
+    Returns
+    -------
+        tokens: list of tokens as unicode strings.
+    """
+    _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
+    tokens = []
+    while s:
+        if s[0] == "\\":
+            tokens.append(_COMMAND_RE.match(s).group(0))
+        else:
+            tokens.append(s[0])
+
+        s = s[len(tokens[-1]) :]
+
+    return tokens
+
+
+@app.function(
+    image=IMAGE,
+    gpu=GPU_CONFIG,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def pretrained_pred_ink(img_path: Path) -> str:
+    """
+    Run pretrained VLM on ink.
+    """
+    with open(img_path, "rb") as image_file:
+        base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+    img_url = f"data:image/jpeg;base64,{base64_img}"
+    messages = [
+        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": DEFAULT_QUESTION},
+                {"type": "image_url", "image_url": {"url": img_url}},
+            ],
+        },
+    ]
+
+    global llm
+    global sampling_params
+    # load pretrained vlm if not already loaded
+    if "llm" not in globals():
+        llm = LLM(
+            model=SLOW_RATER,
+            enforce_eager=ENFORCE_EAGER,
+            max_num_seqs=MAX_NUM_SEQS,
+            tensor_parallel_size=GPU_COUNT,
+            trust_remote_code=True,
+            mm_processor_kwargs={
+                "min_pixels": MIN_PIXELS,
+                "max_pixels": MAX_PIXELS,
+            },
+            **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
+        )
+    if "sampling_params" not in globals():
+        sampling_params = SamplingParams(
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            repetition_penalty=REPEATION_PENALTY,
+            max_tokens=MAX_TOKENS,
+            stop_token_ids=STOP_TOKEN_IDS,
+        )
+    outputs = llm.chat(messages, sampling_params)
+    generated_text = outputs[0].outputs[0].text.strip()
+    return generated_text
+
+
+def compute_cer(gt: list[str], output: list[str]) -> float:
+    """Computes CER given pairs of ground truth and model output."""
+
+    class TokenizeTransform(jiwer.transforms.AbstractTransform):
+        def process_string(self, s: str):
+            try:
+                return tokenize_expression(r"{}".format(s))
+            except Exception:  # invalid latex
+                return []
+
+        def process_list(self, tokens: list[str]):
+            return [self.process_string(token) for token in tokens]
+
+    return jiwer.cer(
+        truth=list(gt),
+        hypothesis=list(output),
+        reference_transform=TokenizeTransform(),
+        hypothesis_transform=TokenizeTransform(),
+    )
+
+
+@app.function(
+    image=IMAGE,
+    gpu=GPU_CONFIG,
+    volumes=VOLUME_CONFIG,
+    secrets=SECRETS,
+    timeout=ETL_TIMEOUT,
+)
+def pred_ink(img_path: Path) -> str:
+    """
+    Run trained VLM on ink.
+    """
+    with open(img_path, "rb") as image_file:
+        base64_img = base64.b64encode(image_file.read()).decode("utf-8")
+    img_url = f"data:image/jpeg;base64,{base64_img}"
+    messages = [
+        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": DEFAULT_QUESTION},
+                {"type": "image_url", "image_url": {"url": img_url}},
+            ],
+        },
+    ]
+
+    global llm
+    global sampling_params
+    # load pretrained vlm if not already loaded
+    if "llm" not in globals():
+        llm = LLM(
+            model=SLOW_RUNNER,
+            enforce_eager=ENFORCE_EAGER,
+            max_num_seqs=MAX_NUM_SEQS,
+            tensor_parallel_size=GPU_COUNT,
+            trust_remote_code=True,
+            mm_processor_kwargs={
+                "min_pixels": MIN_PIXELS,
+                "max_pixels": MAX_PIXELS,
+            },
+            **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
+        )
+    if "sampling_params" not in globals():
+        sampling_params = SamplingParams(
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            repetition_penalty=REPEATION_PENALTY,
+            max_tokens=MAX_TOKENS,
+            stop_token_ids=STOP_TOKEN_IDS,
+        )
+    outputs = llm.chat(messages, sampling_params)
+    generated_text = outputs[0].outputs[0].text.strip()
+    return generated_text
+
+
+def write_dpo_json(json_path: Path, img_paths: list, preds: list, labels: list):
+    with open(json_path, "w") as f:
+        json.dump(
+            [
+                {
+                    "conversations": [
+                        {
+                            "from": "human",
+                            "value": f"<image>{DEFAULT_QUESTION}",
+                        },
+                    ],
+                    "chosen": {
+                        "from": "gpt",
+                        "value": label,
+                    },
+                    "rejected": {
+                        "from": "gpt",
+                        "value": pred,
+                    },
+                    "images": [
+                        str(img_path),
+                    ],
+                }
+                for img_path, pred, label in zip(
+                    img_paths,
+                    preds,
+                    labels,
+                    strict=True,
+                )
+            ],
+            f,
+            indent=4,
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -612,15 +845,6 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
     if not cls and not sft and not dpo:
         raise ValueError("Must specify at least one of `cls`, `sft`, or `dpo`")
 
-    # load df; o/w create and save for later use
-    if modal.is_local():
-        DATA_VOL_PATH = str(PARENT_PATH / "training" / "artifacts" / "mathwriting-2024")
-        if not os.path.exists(DATA_VOL_PATH):
-            raise Exception(f"""
-    {DATA_VOL_PATH} does not exist.
-    """)
-    else:
-        DATA_VOL_PATH = f"/{DATA_VOLUME}"
     PARQUET_FILENAME = f"{DATA_VOL_PATH}/data.parquet"
 
     df = spark.createDataFrame([], schema="img_path string, label string, split string")
@@ -671,20 +895,18 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
 
     if cls:
-        # run model to assign writing quality to random subset
-        df = df.withColumn("writing_quality", lit(None).cast(IntegerType()))
+        # run VLM to assign score to random subset
+        df = df.withColumn("score", lit(None).cast(IntegerType()))
         df_parts = []
         for split in SPLITS:
             ## get random subset of split data
             split_df = df.filter(col("split") == split)
-            split_filter_df = split_df.sample(
-                False, N_SAMPLES_PER_SPLIT_CLS[split] / split_cts[split], float(RANDOM_SEED)
-            )
+            split_df = split_df.sample(False, N_SAMPLES_PER_SPLIT_CLS[split] / split_cts[split], float(RANDOM_SEED))
 
-            ## run model
-            img_paths = [Path(row.img_path) for row in split_filter_df.select("img_path").collect()]
+            ## run
+            img_paths = [Path(row.img_path) for row in split_df.select("img_path").collect()]
             if modal.is_local():
-                writing_qualities = list(
+                scores = list(
                     tqdm(
                         (analyze_ink.local(p) for p in img_paths),
                         desc=split,
@@ -692,28 +914,30 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                writing_qualities = analyze_ink.map(img_paths)
+                scores = analyze_ink.map(img_paths)
 
             ## save to write later
-            new_schema = ["img_path", "split", "writing_quality"]
-            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=True)]
-            updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
-            df_parts.append(updates_df)
+            split_df = spark.createDataFrame(
+                [(str(p), split, sc) for p, sc in zip(img_paths, scores, strict=True)],
+                schema=["img_path", "split", "score"],
+            )
+            df_parts.append(split_df)
             print(f"Labeled {N_SAMPLES_PER_SPLIT_CLS[split]} samples for split {split}")
+            print(f"Score distribution: {Counter(scores)}")
 
         ## write to df
-        write_df = df_parts[0]
+        split_df = df_parts[0]
         for update_df in df_parts[1:]:
-            write_df = write_df.unionByName(update_df)
+            split_df = split_df.unionByName(update_df)
         df = (
             df.alias("main")
-            .join(write_df.alias("upd"), on=["img_path", "split"], how="left")
+            .join(split_df.alias("upd"), on=["img_path", "split"], how="left")
             .select(
                 col("main.img_path"),
                 col("main.label"),
                 col("main.split"),
-                # If main already had writing_quality, we merge it; otherwise just pick upd
-                coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
+                # If main already had score, we merge it; otherwise just pick upd
+                coalesce(col("upd.score"), col("main.score")).alias("score"),
             )
         )
         df.write.mode("overwrite").parquet(PARQUET_FILENAME)
@@ -723,15 +947,17 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         for split in SPLITS:
             ## get non-labeled samples
             split_df = df.filter(col("split") == split)
-            split_df_wq_null = split_df.filter(split_df.writing_quality.isNull())
+            split_df = split_df.filter(split_df.score.isNull())
 
             ## run model
-            img_paths = [Path(row.img_path) for row in split_df_wq_null.select("img_path").collect()]
+            img_paths = []
+            for chunk in chunked(split_df.select("img_path").toLocalIterator(), TABLE_BS):
+                img_paths.extend(Path(row.img_path) for row in chunk)
             if not img_paths:
                 continue
             if modal.is_local():
                 img_batches = list(chunked(img_paths, CLS_RUN_BS))
-                writing_qualities = list(
+                scores = list(
                     tqdm(
                         chain.from_iterable(classify_ink.local(p) for p in img_batches),
                         desc=split,
@@ -739,169 +965,180 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                writing_qualities = classify_ink.map(img_paths)
+                scores = classify_ink.map(img_paths)
 
             ## save to write later
-            new_schema = ["img_path", "split", "writing_quality"]
-            data_for_split = [(str(p), split, wq) for p, wq in zip(img_paths, writing_qualities, strict=True)]
-            updates_df = spark.createDataFrame(data_for_split, schema=new_schema)
-            df_parts.append(updates_df)
+            split_df = spark.createDataFrame(
+                [(str(p), split, sc) for p, sc in zip(img_paths, scores, strict=True)],
+                schema=["img_path", "split", "score"],
+            )
+            df_parts.append(split_df)
 
         ## write to df
         if df_parts:
-            write_df = df_parts[0]
+            split_df = df_parts[0]
             for update_df in df_parts[1:]:
-                write_df = write_df.unionByName(update_df)
+                split_df = split_df.unionByName(update_df)
             df = (
                 df.alias("main")
-                .join(write_df.alias("upd"), on=["img_path", "split"], how="left")
+                .join(split_df.alias("upd"), on=["img_path", "split"], how="left")
                 .select(
                     col("main.img_path"),
                     col("main.label"),
                     col("main.split"),
-                    coalesce(col("upd.writing_quality"), col("main.writing_quality")).alias("writing_quality"),
+                    coalesce(col("upd.score"), col("main.score")).alias("score"),
                 )
             )
             df.write.mode("overwrite").parquet(PARQUET_FILENAME)
 
-        # filter to only get data with writing quality == 1
-        filter_df_parts = []
-        for split in SPLITS:
-            split_df = df.filter(col("split") == split)
-            split_filter_df = split_df.filter(split_df.writing_quality == 1)
-            filter_df_parts.append(split_filter_df)
-        filter_df = filter_df_parts[0]
-        for filtered_df in filter_df_parts[1:]:
-            filter_df = filter_df.unionByName(filtered_df)
-
         # deduplication
-        dedup_df_parts = []
+        df_parts = []
 
         ## compute minhash vec
         compute_phash_udf = udf(lambda img_path: str(phash(Image.open(img_path), hash_size=HASH_SZ)), StringType())
         compute_minhash_udf = udf(compute_minhash, ArrayType(IntegerType()))
         vector_udf = udf(lambda minhash: Vectors.dense(minhash), VectorUDT())
-
-        filter_df = filter_df.withColumn("phash", compute_phash_udf(col("img_path")))
-        filter_df = filter_df.withColumn("minhash", compute_minhash_udf(col("phash")))
-        filter_df = filter_df.withColumn("minhash_vec", vector_udf(col("minhash")))
+        df = (
+            df.withColumn("phash", compute_phash_udf(col("img_path")))
+            .withColumn("minhash", compute_minhash_udf(col("phash")))
+            .withColumn("minhash_vec", vector_udf(col("minhash")))
+        )
 
         ## dedup with lsh
         for split in SPLITS:
-            split_df = filter_df.filter(col("split") == split)
+            split_df = df.filter(col("split") == split)
+
+            ## lsh
             lsh = MinHashLSH(inputCol="minhash_vec", outputCol="hashes", numHashTables=NUM_PERM)
             lsh_model = lsh.fit(split_df)
-            deduped_df = (
+
+            ## approx sim join
+            split_df = (
                 lsh_model.approxSimilarityJoin(split_df, split_df, THRESHOLD, distCol="distance")
                 .filter("datasetA.img_path != datasetB.img_path")
                 .select("datasetA.*")
                 .distinct()
             )
+            split_df = split_df.drop("phash", "minhash", "minhash_vec", "hashes")
+            df_parts.append(split_df)
+        split_df = df_parts[0]
+        for update_df in df_parts[1:]:
+            split_df = split_df.unionByName(update_df)
 
-            split_dedup_df = deduped_df.drop("phash", "minhash", "minhash_vec", "hashes")
-            dedup_df_parts.append(split_dedup_df)
-        dedup_df = dedup_df_parts[0]
-        for deduped_df in dedup_df_parts[1:]:
-            dedup_df = dedup_df.unionByName(deduped_df)
-
-        # randomly stitch samples together
-        final_img_paths = []
-        final_labels = []
+        # randomly stitch samples together + determine CER
+        img_paths, labels = {}, {}
         for split in SPLITS:
-            split_df = dedup_df.filter(col("split") == split)
-            img_paths = [row.img_path for row in split_df.collect()]
-            labels = [row.label for row in split_df.collect()]
+            split_df = df.filter(col("split") == split)
 
-            ## create randomly-sized batches
-            pairs = list(zip(img_paths, labels, strict=True))
-            batches = list(random_chunked(pairs, STITCH_BS_MAX))
+            for score in CLASSES:
+                split_filter_df = split_df.filter(split_df.score == score)
 
-            ## batch -> (list_of_img_paths, combined_label) tuples.
-            def process_batch(batch: list[tuple[str, str]]) -> tuple[list[Path], str]:
-                batch_img_paths, batch_labels = zip(*batch, strict=True)
-                return list(batch_img_paths), "".join(batch_labels)
+                if not img_paths.get(split, []) or not labels.get(split, []):
+                    img_paths[split] = []
+                    labels[split] = []
 
-            batches_data = [process_batch(batch) for batch in batches]
+                for chunk in chunked(split_filter_df.select("img_path", "label").toLocalIterator(), TABLE_BS):
+                    img_paths[split].extend([Path(row.img_path) for row in chunk])
+                    labels[split].extend([row.label for row in chunk])
+                if not img_paths.get(split, []) or not labels.get(split, []):
+                    continue
+
+                ## rand sample
+                paths = []
+                combined_labels = []
+                for _ in range(N_SAMPLES_PER_SPLIT_SFT[split] // len(CLASSES)):
+                    num_sample = random.randint(1, STITCH_BS_MAX)
+                    idxs = random.sample(
+                        range(len(img_paths[split])), min(num_sample, len(img_paths[split]))
+                    )  # in case not enough
+                    paths.append([img_paths[split][i] for i in idxs])
+                    combined_labels.append("".join([labels[split][i] for i in idxs]))
+
+                ## run
+                if modal.is_local():
+                    stitched_img_paths = list(
+                        tqdm(
+                            thread_map(
+                                stitch_imgs.local,
+                                paths,
+                                max_workers=multiprocessing.cpu_count(),
+                                desc=split,
+                            ),
+                            total=len(paths),
+                        )
+                    )
+                else:
+                    stitched_img_paths = stitch_imgs.map(paths)
+
+                img_paths[split].extend(stitched_img_paths)
+                labels[split].extend(combined_labels)
 
             if modal.is_local():
-
-                def stitch_batch(data: tuple[list[Path], str]) -> tuple[str, str]:
-                    paths, combined_label = data
-                    stitched_path = stitch_imgs.local(paths)
-                    return stitched_path, combined_label
-
-                stitched_batches = list(
+                preds = list(
                     tqdm(
-                        thread_map(
-                            stitch_batch,
-                            batches_data,
-                            max_workers=multiprocessing.cpu_count(),
-                            desc=split,
-                        ),
-                        total=len(batches_data),
+                        (pretrained_pred_ink.local(p) for p in img_paths[split]),
+                        desc=split,
+                        total=len(img_paths[split]),
                     )
                 )
             else:
-                paths_list = [data[0] for data in batches_data]
-                combined_labels = [data[1] for data in batches_data]
-                stitched_img_paths = stitch_imgs.map(paths_list)
-                stitched_batches = list(zip(stitched_img_paths, combined_labels, strict=True))
+                preds = pretrained_pred_ink.map(img_paths[split])
 
-            ## unroll
-            stitched_img_paths, combined_labels = zip(*stitched_batches, strict=True)
-            stitched_img_paths = list(stitched_img_paths)
-            combined_labels = list(combined_labels)
-
-            ## randomly sample
-            random.shuffle(stitched_img_paths)
-            random.shuffle(combined_labels)
-            stitched_img_paths = stitched_img_paths[: N_SAMPLES_PER_SPLIT_SFT[split]]
-            combined_labels = combined_labels[: N_SAMPLES_PER_SPLIT_SFT[split]]
-
-            final_img_paths.extend(stitched_img_paths)
-            final_labels.extend(combined_labels)
+            img_paths[split], labels[split], preds = zip(
+                *[
+                    (path, label, pred)
+                    for path, label, pred in zip(img_paths[split], labels[split], preds, strict=False)
+                    if label != pred
+                ],
+                strict=False,
+            )
+            print(f"{split} CER: {compute_cer(labels[split], preds)*100:.1f} %")
 
         # write to json
-        json_output = [
-            {
-                "messages": [
-                    {
-                        "content": DEFAULT_SYSTEM_PROMPT,
-                        "role": "system",
-                    },
-                    {
-                        "content": f"<image>{DEFAULT_QUESTION}",
-                        "role": "user",
-                    },
-                    {
-                        "content": label,
-                        "role": "assistant",
-                    },
-                ],
-                "images": [
-                    img_path,
-                ],
-            }
-            for label, img_path in zip(
-                final_labels,
-                final_img_paths,
+        write_sft_json(SFT_TRAIN_JSON, img_paths["train"], labels["train"])
+        write_sft_json(SFT_VAL_JSON, img_paths["val"], labels["val"])
+        write_sft_json(SFT_TEST_JSON, img_paths["test"], labels["test"])
+    if dpo:
+        # run model to determine CER + which train samples it fails on
+        for split in SPLITS:
+            json_path = SFT_TRAIN_JSON if split == "train" else SFT_VAL_JSON if split == "val" else SFT_TEST_JSON
+            with open(json_path, "r") as f:
+                read_ds = yaml.safe_load(f)
+            img_paths, labels = zip(
+                *tqdm(
+                    thread_map(
+                        lambda sample: (sample["images"][0], sample["conversations"][1]["value"]),
+                        read_ds,
+                        max_workers=multiprocessing.cpu_count(),
+                    ),
+                    total=len(read_ds),
+                ),
                 strict=True,
             )
-        ]
-        output_path = Path(f"{DATA_VOL_PATH}/sft.json")
-        with open(output_path, "w") as f:
-            json.dump(json_output, f, indent=4)
-    if dpo:
-        # load df
 
-        # run trained VLM on val data
+            ## run
+            if modal.is_local():
+                preds = list(
+                    tqdm(
+                        (pred_ink.local(p) for p in img_paths),
+                        desc=split,
+                        total=len(img_paths),
+                    )
+                )
+            else:
+                preds = pred_ink.map(img_paths)
 
-        # identify subset of val samples with worst perf
-
-        # prompt user to manually label data
-
-        # write to json
-        pass
+            img_paths, labels, preds = zip(
+                *[
+                    (path, label, pred)
+                    for path, label, pred in zip(img_paths, labels, preds, strict=False)
+                    if label != pred
+                ],
+                strict=False,
+            )
+            print(f"{split} CER: {compute_cer(labels, preds)*100:.1f} %")
+            if split == "train":
+                write_dpo_json(DPO_TRAIN_JSON, img_paths, preds, labels)
 
 
 @app.function(
@@ -929,7 +1166,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     download_models()
     main(args.cls, args.sft, args.dpo)
-
-
-# TODO:
-# - get better data (cutmix/mixup, filters, etc.)

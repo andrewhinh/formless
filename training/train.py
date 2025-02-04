@@ -1,11 +1,18 @@
-"""Official Timm/Qwen-VL training scripts."""
+"""Official Timm/Qwen2-VL training scripts."""
+
+import os
+import sys
+from pathlib import Path
+
+# since file must be run inside training/, and utils is in project root
+project_root = os.path.abspath(Path(__file__).parent.parent)
+sys.path.append(project_root)
+
 
 import importlib
 import json
 import logging
-import os
 import random
-import sys
 import time
 from collections import OrderedDict
 from contextlib import suppress
@@ -39,9 +46,6 @@ from timm.utils import ApexScaler, NativeScaler
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../"))
-sys.path.append(project_root)
 
 from utils import DATA_VOLUME, GPU_IMAGE, IN_PROD, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
 
@@ -82,14 +86,18 @@ _logger = logging.getLogger("train")
 PARENT_PATH = Path(__file__).parent
 ARTIFACT_PATH = PARENT_PATH / "artifacts"
 
+# setup
+seed = 42  # random seed (default: 42)
+random.seed(seed)
+load_dotenv(".env" if IN_PROD else ".env.dev")
+
 
 # -----------------------------------------------------------------------------
 
 # cls
 
-classes = ["1", "2", "3"]
-
 ## dataset
+CLASSES = ["1", "2", "3"]
 data_dir = ARTIFACT_PATH / "mathwriting-2024"  # path to dataset (root dir)
 dataset = ""  # dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)
 train_split = "train"  # dataset train split (default: train)
@@ -105,7 +113,7 @@ pretrained_path = None  # Load this checkpoint as if they were the pretrained we
 initial_checkpoint = ""  # Load this checkpoint into model after initialization (default: none)
 resume = ""  # Resume full model and optimizer state from checkpoint (default: none)
 no_resume_opt = False  # prevent resume of optimizer state when resuming model
-num_classes = len(classes)  # number of label classes (Model default if None)
+num_classes = len(CLASSES)  # number of label classes (Model default if None)
 gp = None  # Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.
 img_size = None  # Image size (default: None => model default)
 in_chans = None  # Image input channels (default: None => 3)
@@ -170,7 +178,7 @@ lr_cycle_limit = 1  # learning rate cycle limit, cycles enabled if > 1
 lr_k_decay = 1.0  # learning rate k-decay for cosine/poly (default: 1.0)
 warmup_lr = 1e-5  # warmup learning rate (default: 1e-5)
 min_lr = 0  # lower lr bound for cyclic schedulers that hit 0 (default: 0)
-epochs = 1  # number of epochs to train (default: 300)
+epochs = 5  # number of epochs to train (default: 300)
 epoch_repeats = 0.0  # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).
 start_epoch = None  # manual epoch number (useful on restarts)
 decay_milestones = [90, 180, 270]  # list of decay epoch indices for multistep lr. must be increasing
@@ -232,7 +240,6 @@ model_ema_decay = 0.9998  # Decay factor for model weights moving average (defau
 model_ema_warmup = False  # Enable warmup for model EMA decay.
 
 ## misc
-seed = 42  # random seed (default: 42)
 worker_seeding = "all"  # worker seed mode (default: all)
 log_interval = 1  # how many batches to wait before logging training status
 recovery_interval = 0  # how many batches to wait before writing recovery checkpoint
@@ -290,23 +297,18 @@ app = modal.App(name=APP_NAME)
 
 
 ## dataset_info.json
+SFT_DATA = "sft_train.json"
+DPO_DATA = "dpo_train.json"
 dataset_info = {
     "sft": {
-        "file_name": f"{TRAIN_REPO_PATH}/data/sft.json",
+        "file_name": f"{TRAIN_REPO_PATH}/data/{SFT_DATA}",
         "formatting": "sharegpt",
-        "columns": {"messages": "messages", "images": "images"},
-        "tags": {
-            "role_tag": "role",
-            "content_tag": "content",
-            "user_tag": "user",
-            "assistant_tag": "assistant",
-            "system_tag": "system",
-        },
+        "columns": {"messages": "conversations", "images": "images"},
     },
     "dpo": {
-        "file_name": f"{TRAIN_REPO_PATH}/data/dpo.json",
-        "ranking": True,
+        "file_name": f"{TRAIN_REPO_PATH}/data/{DPO_DATA}",
         "formatting": "sharegpt",
+        "ranking": True,
         "columns": {"messages": "conversations", "chosen": "chosen", "rejected": "rejected", "images": "images"},
     },
 }
@@ -347,7 +349,7 @@ with open(f"{TRAIN_REPO_PATH}/ds_z3_config.json", "w") as f:
 
 if modal.is_local():
     DATA_VOL_PATH = str(ARTIFACT_PATH / "mathwriting-2024")
-    RUNS_VOL_PATH = str(ARTIFACT_PATH / "runs" / "cls")
+    RUNS_VOL_PATH = str(ARTIFACT_PATH / "runs")
     if not os.path.exists(DATA_VOL_PATH):
         raise Exception(f"""
 {DATA_VOL_PATH} does not exist.
@@ -361,9 +363,14 @@ else:
 
 # sft
 
+BASE_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+SFT_MODEL = "qwen2-vl-7b-instruct-lora-sft"
+SFT_YAML = "qwen2vl_lora_sft_train.yaml"
+SFT_MERGE_YAML = "qwenvl_lora_sft_merge.yaml"
+
 sft_config = {
     ### model
-    "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
+    "model_name_or_path": BASE_MODEL,
     "image_resolution": 262144,
     "video_resolution": 16384,
     "trust_remote_code": True,
@@ -376,12 +383,12 @@ sft_config = {
     ### dataset
     "dataset": "sft",
     "template": "qwen2_vl",
-    "cutoff_len": 2048,  # 131072 = 2**17
+    "cutoff_len": 2048,
     "max_samples": 1000,
     "overwrite_cache": True,
     "preprocessing_num_workers": 16,  # 16 = max
     ### output
-    "output_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft",
+    "output_dir": f"{RUNS_VOL_PATH}/{SFT_MODEL}",
     "logging_steps": 10,
     "save_steps": 500,
     "plot_loss": True,
@@ -390,8 +397,8 @@ sft_config = {
     ### train
     "per_device_train_batch_size": 1,
     "gradient_accumulation_steps": 2,
-    "learning_rate": 1.0e-5,
-    "num_train_epochs": 30.0,
+    "learning_rate": 1.0e-4,
+    "num_train_epochs": 5.0,
     "lr_scheduler_type": "cosine",
     "warmup_ratio": 0.1,
     "bf16": True,
@@ -402,23 +409,23 @@ sft_config = {
     "eval_strategy": "steps",
     "eval_steps": 500,
 }
-with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_sft_train.yaml", "w") as f:
+with open(f"{TRAIN_REPO_PATH}/{SFT_YAML}", "w") as f:
     yaml.dump(sft_config, f)
 
 sft_merge_config = {
     ### model
-    "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
-    "adapter_name_or_path": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft",
+    "model_name_or_path": BASE_MODEL,
+    "adapter_name_or_path": f"{RUNS_VOL_PATH}/{SFT_MODEL}",
     "template": "qwen2_vl",
     "finetuning_type": "lora",
     "trust_remote_code": True,
     ### export
-    "export_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft-merged",
+    "export_dir": f"{RUNS_VOL_PATH}/{SFT_MODEL}-merged",
     "export_size": 2,
     "export_device": "cpu",
     "export_legacy_format": False,
 }  ## Note: DO NOT use quantized model or quantization_bit when merging lora adapters
-with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_sft_merge.yaml", "w") as f:
+with open(f"{TRAIN_REPO_PATH}/{SFT_MERGE_YAML}", "w") as f:
     yaml.dump(sft_merge_config, f)
 
 
@@ -426,9 +433,15 @@ with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_sft_merge.yaml", "w") as f:
 
 # dpo
 
+DPO_MODEL = "qwen2-vl-7b-instruct-lora-dpo"
+DPO_YAML = "qwen2vl_lora_dpo_train.yaml"
+DPO_MERGE_YAML = "qwen2vl_lora_dpo_merge.yaml"
+
 dpo_train_config = {
     ### model
-    "model_name_or_path": "andrewhinh/qwen2-vl-7b-instruct-full-sft",
+    "model_name_or_path": f"{RUNS_VOL_PATH}/{SFT_MODEL}-merged",
+    "image_resolution": 262144,
+    "video_resolution": 16384,
     "trust_remote_code": True,
     ### method
     "stage": "dpo",
@@ -440,12 +453,12 @@ dpo_train_config = {
     ### dataset
     "dataset": "dpo",
     "template": "qwen2_vl",
-    "cutoff_len": 131072,  # 2**17
+    "cutoff_len": 4096,
     "max_samples": 1000,
     "overwrite_cache": True,
     "preprocessing_num_workers": 16,  # 16 = max
     ### output
-    "output_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo",
+    "output_dir": f"{RUNS_VOL_PATH}/{DPO_MODEL}",
     "logging_steps": 10,
     "save_steps": 500,
     "plot_loss": True,
@@ -455,7 +468,7 @@ dpo_train_config = {
     "per_device_train_batch_size": 1,
     "gradient_accumulation_steps": 8,
     "learning_rate": 5.0e-6,
-    "num_train_epochs": 3.0,
+    "num_train_epochs": 5.0,
     "lr_scheduler_type": "cosine",
     "warmup_ratio": 0.1,
     "bf16": True,
@@ -466,31 +479,28 @@ dpo_train_config = {
     "eval_strategy": "steps",
     "eval_steps": 500,
 }
-with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_dpo_train.yaml", "w") as f:
-    yaml.dump(sft_config, f)
+with open(f"{TRAIN_REPO_PATH}/{DPO_YAML}", "w") as f:
+    yaml.dump(dpo_train_config, f)
 
 dpo_merge_config = {
     ### model
-    "model_name_or_path": "Qwen/Qwen2-VL-7B-Instruct",
-    "adapter_name_or_path": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo",
+    "model_name_or_path": BASE_MODEL,
+    "adapter_name_or_path": f"{RUNS_VOL_PATH}/{DPO_MODEL}",
     "template": "qwen2_vl",
     "finetuning_type": "lora",
     "trust_remote_code": True,
     ### export
-    "export_dir": f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo-merged",
+    "export_dir": f"{RUNS_VOL_PATH}/{DPO_MODEL}-merged",
     "export_size": 2,
     "export_device": "cpu",
     "export_legacy_format": False,
 }  ## Note: DO NOT use quantized model or quantization_bit when merging lora adapters
-with open(f"{TRAIN_REPO_PATH}/qwen2vl_lora_dpo_merge.yaml", "w") as f:
+with open(f"{TRAIN_REPO_PATH}/{DPO_MERGE_YAML}", "w") as f:
     yaml.dump(dpo_merge_config, f)
 
 # -----------------------------------------------------------------------------
 
-# setup
-
-random.seed(seed)
-load_dotenv(".env" if IN_PROD else ".env.dev")
+# helpers
 
 
 def run_cls():  # noqa: C901
@@ -1049,7 +1059,7 @@ def run_cls():  # noqa: C901
     push_to_hf_hub(
         model,
         model_hub_name,
-        model_config={"label_names": config["classes"]},
+        model_config={"label_names": CLASSES},
     )
 
     if distributed:
@@ -1289,7 +1299,9 @@ def validate_cls(
 
 
 def push_to_hub(local_dir: str, model_name: str):
-    model = Qwen2VLForConditionalGeneration.from_pretrained(local_dir)
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
+        local_dir, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto"
+    )
     processor = AutoProcessor.from_pretrained(local_dir)
     api = HfApi()
     user_info = api.whoami(token=os.getenv("HF_TOKEN"))
@@ -1314,120 +1326,58 @@ def main(cls: bool, sft: bool, dpo: bool):
         _exec_subprocess(
             [
                 "cp",
-                f"{DATA_VOL_PATH}/sft.json",
-                "data/sft.json",
+                f"{DATA_VOL_PATH}/{SFT_DATA}",
+                f"data/{SFT_DATA}",
             ]
         )
         _exec_subprocess(
             [
                 "llamafactory-cli",
                 "train",
-                "qwen2vl_lora_sft_train.yaml",
+                SFT_YAML,
             ]
         )
-        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft", "qwen2-vl-7b-instruct-lora-sft")
+        push_to_hub(f"{RUNS_VOL_PATH}/{SFT_MODEL}", SFT_MODEL)
         _exec_subprocess(
             [
                 "llamafactory-cli",
                 "export",
-                "qwen2vl_lora_sft_merge.yaml",
+                SFT_MERGE_YAML,
             ]
         )
-        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-sft-merged", "qwen2-vl-7b-instruct-lora-sft-merged")
+        push_to_hub(f"{RUNS_VOL_PATH}/{SFT_MODEL}-merged", f"{SFT_MODEL}-merged")
         # checkpoint_folder = str(
         #     max(
-        #         list((Path(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-full-sft").glob("checkpoint-*"))),
+        #         list((Path(f"{RUNS_VOL_PATH}/{SFT_MODEL}).glob("checkpoint-*"))),
         #         key=lambda x: int(x.name.split("-")[-1]),
         #     )
         # )
-        # push_to_hub(checkpoint_folder, "qwen2-vl-7b-instruct-full-sft")
+        # push_to_hub(checkpoint_folder, SFT_MODEL)
     if dpo:
         os.chdir(TRAIN_REPO_PATH)
         _exec_subprocess(
             [
                 "cp",
-                f"{DATA_VOL_PATH}/dpo.json",
-                "data/dpo.json",
+                f"{DATA_VOL_PATH}/{DPO_DATA}",
+                f"data/{DPO_DATA}",
             ]
         )
         _exec_subprocess(
             [
                 "llamafactory-cli",
                 "train",
-                "qwen2vl_lora_dpo_train.yaml",
+                DPO_YAML,
             ]
         )
-        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo", "qwen2-vl-7b-instruct-lora-dpo")
+        push_to_hub(f"{RUNS_VOL_PATH}/{DPO_MODEL}", DPO_MODEL)
         _exec_subprocess(
             [
                 "llamafactory-cli",
                 "export",
-                "qwen2vl_lora_dpo_merge.yaml",
+                DPO_MERGE_YAML,
             ]
         )
-        push_to_hub(f"{RUNS_VOL_PATH}/qwen2-vl-7b-instruct-lora-dpo-merged", "qwen2-vl-7b-instruct-lora-dpo-merged")
-
-    # TODO: use to create tokens and test model
-    # _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
-
-    # def tokenize_expression(s: str) -> list[str]:
-    #     r"""Transform a Latex math string into a list of tokens.
-
-    #     Tokens are strings that are meaningful in the context of Latex
-    #     e.g. '1', r'\alpha', r'\frac'.
-
-    #     Args:
-    #       s: unicode input string (ex: r"\frac{1}{2}")
-
-    #     Returns
-    #     -------
-    #       tokens: list of tokens as unicode strings.
-    #     """
-    #     tokens = []
-    #     while s:
-    #         if s[0] == "\\":
-    #             tokens.append(_COMMAND_RE.match(s).group(0))
-    #         else:
-    #             tokens.append(s[0])
-
-    #         s = s[len(tokens[-1]) :]
-
-    #     return tokens
-
-    # # Example
-    # print(tokenize_expression(r"\frac{\alpha}{2}\begin{matrix}1&0\\0&1\end{matrix}\not\in\mathbb{R}"))
-    # ### CER Computation
-
-    # def compute_cer(truth_and_output: list[tuple[str, str]]):
-    #     """Computes CER given pairs of ground truth and model output."""
-
-    #     class TokenizeTransform(jiwer.transforms.AbstractTransform):
-    #         def process_string(self, s: str):
-    #             return tokenize_expression(r"{}".format(s))
-
-    #         def process_list(self, tokens: list[str]):
-    #             return [self.process_string(token) for token in tokens]
-
-    #     ground_truth, model_output = zip(*truth_and_output, strict=False)
-
-    #     return jiwer.cer(
-    #         truth=list(ground_truth),
-    #         hypothesis=list(model_output),
-    #         reference_transform=TokenizeTransform(),
-    #         hypothesis_transform=TokenizeTransform(),
-    #     )
-
-    # # Test data to run compute_cer().
-    # # The first element is the model prediction, the second the ground truth.
-    # examples = [
-    #     (r"\sqrt{2}", r"\sqrt{2}"),  # 0 mistakes, 4 tokens
-    #     (r"\frac{1}{2}", r"\frac{i}{2}"),  # 1 mistake, 7 tokens
-    #     (r"\alpha^{2}", "a^{2}"),  # 1 mistake, 5 tokens
-    #     ("abc", "def"),  # 3 mistakes, 3 tokens
-    # ]
-
-    # # 5 mistakes for 19 tokens: 26.3% error rate.
-    # print(f"{compute_cer(examples)*100:.1f} %")
+        push_to_hub(f"{RUNS_VOL_PATH}/{DPO_MODEL}-merged", f"{DPO_MODEL}-merged")
 
 
 @app.function(
