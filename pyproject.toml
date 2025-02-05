@@ -44,13 +44,15 @@ dependencies = [
     "torchvision>=0.20.1",
     "tqdm==4.67.1",
     "validators==0.34.0",
-    "vllm==0.6.5",
     "wandb>=0.19.4",
     "wheel==0.41.2",
     "transformers>=4.48.2",
     "autoawq>=0.2.7.post3",
     "s3fs>=2024.9.0",
     "jiwer>=3.1.0",
+    "lark-parser>=0.12.0",
+    "vllm>=0.7.1",
+    "outlines>=0.1.11",
 ]
 
 [project.scripts]

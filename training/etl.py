@@ -94,11 +94,58 @@ ENFORCE_EAGER = False
 MAX_NUM_SEQS = 16  # max for 3090
 MIN_PIXELS = 28 * 28
 MAX_PIXELS = 1280 * 28 * 28
-TEMPERATURE = 0.2
+TEMPERATURE = 0.0
 TOP_P = 0.001
 REPEATION_PENALTY = 1.05
-MAX_TOKENS = 5
 STOP_TOKEN_IDS = []
+
+MAX_SCORE_TOKENS = 3
+MAX_VLM_TOKENS = 2048
+
+LATEX_GRAMMER = """
+start: math_expr
+
+math_expr: inline_math | display_math
+
+inline_math: "$" expr "$"
+display_math: BEGIN "{" ENV "}" expr END "{" ENV "}"
+
+?expr: term
+     | expr operator term   -> binop
+
+?term: NUMBER
+     | VARIABLE
+     | function
+     | "{" expr "}"
+     | FRAC "{" expr "}" "{" expr "}"
+
+function: SIN "(" expr ")"
+        | COS "(" expr ")"
+        | TAN "(" expr ")"
+        | LOG "(" expr ")"
+        | EXP "(" expr ")"
+        | SQRT "{" expr "}"
+
+operator: "+" | "-" | "*" | "/" | "=" | "^"
+
+BEGIN: "\\begin"
+END: "\\end"
+FRAC: "\\frac"
+SIN: "\\sin"
+COS: "\\cos"
+TAN: "\\tan"
+LOG: "\\log"
+EXP: "\\exp"
+SQRT: "\\sqrt"
+
+ENV: /[a-zA-Z]+/
+
+%import common.NUMBER
+%import common.CNAME -> VARIABLE
+%import common.WS
+%ignore WS
+"""
+
 
 # -----------------------------------------------------------------------------
 
@@ -447,7 +494,9 @@ def extract_ink_metadata(input_path: Path) -> dict[Path, str]:
     return {"img_path": save_path, "label": label}
 
 
-def run_model(model: str, prompt: str, img_paths: list[Path]) -> list[str]:
+def run_model(
+    img_paths: list[Path], model: str, prompt: str, max_tokens: int = None, guided_decoding: GuidedDecodingParams = None
+) -> list[str]:
     """
     Run model on image(s) with prompt.
     """
@@ -490,9 +539,9 @@ def run_model(model: str, prompt: str, img_paths: list[Path]) -> list[str]:
             temperature=TEMPERATURE,
             top_p=TOP_P,
             repetition_penalty=REPEATION_PENALTY,
-            max_tokens=MAX_TOKENS,
+            max_tokens=max_tokens,
             stop_token_ids=STOP_TOKEN_IDS,
-            guided_decoding=GuidedDecodingParams(choice=[int(cls) for cls in CLASSES]),
+            guided_decoding=guided_decoding,
         )
     outputs = llm.chat(conversations, sampling_params, use_tqdm=True)
     preds = [out.outputs[0].text.strip() for out in outputs]
@@ -510,7 +559,13 @@ def analyze_inks(img_paths: list[Path]) -> list[int]:
     """
     Analyze ink(s) and return score(s).
     """
-    preds = run_model(SLOW_RATER, DIFFICULTY_PROMPT, img_paths)
+    preds = run_model(
+        SLOW_RATER,
+        DIFFICULTY_PROMPT,
+        MAX_SCORE_TOKENS,
+        GuidedDecodingParams(choice=[int(cls) for cls in CLASSES]),
+        img_paths,
+    )
     scores = [int(pred) for pred in preds]
     for img_path, score in zip(img_paths, scores, strict=True):
         img = Image.open(img_path).convert("RGB")
@@ -676,7 +731,13 @@ def pretrained_pred_ink(img_paths: list[Path]) -> list[str]:
     """
     Run pretrained VLM on ink(s).
     """
-    return run_model(SLOW_RATER, DEFAULT_QUESTION, img_paths)
+    return run_model(
+        img_paths,
+        SLOW_RATER,
+        DEFAULT_QUESTION,
+        MAX_VLM_TOKENS,
+        GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
+    )
 
 
 def compute_cer(gt: list[str], output: list[str]) -> float:
@@ -684,10 +745,7 @@ def compute_cer(gt: list[str], output: list[str]) -> float:
 
     class TokenizeTransform(jiwer.transforms.AbstractTransform):
         def process_string(self, s: str):
-            try:
-                return tokenize_expression(r"{}".format(s))
-            except Exception:  # invalid latex
-                return []
+            return tokenize_expression(r"{}".format(s))
 
         def process_list(self, tokens: list[str]):
             return [self.process_string(token) for token in tokens]
@@ -741,7 +799,13 @@ def ft_pred_ink(img_paths: list[Path]) -> list[str]:
     """
     Run trained VLM on ink(s).
     """
-    return run_model(SLOW_RUNNER, DEFAULT_QUESTION, img_paths)
+    return run_model(
+        img_paths,
+        SLOW_RUNNER,
+        DEFAULT_QUESTION,
+        MAX_VLM_TOKENS,
+        GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
+    )
 
 
 def write_dpo_json(json_path: Path, img_paths: list, preds: list, labels: list):
@@ -915,7 +979,8 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                scores = classify_ink.map(img_batches)
+                lst_scores = classify_ink.map(img_batches)
+            scores = [item for lst in lst_scores for item in lst]
 
             ## save to write later
             split_df = spark.createDataFrame(
@@ -1031,7 +1096,8 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                         )
                     )
                 else:
-                    prds = pretrained_pred_ink.map(img_batches)
+                    lst_prds = pretrained_pred_ink.map(img_batches)
+                    prds = [item for lst in lst_prds for item in lst]
 
                 img_paths[split].extend(stitched_img_paths)
                 labels[split].extend(combined_labels)
@@ -1050,17 +1116,8 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             json_path = SFT_TRAIN_JSON if split == "train" else SFT_VAL_JSON if split == "valid" else SFT_TEST_JSON
             with open(json_path, "r") as f:
                 read_ds = yaml.safe_load(f)
-            img_paths, labels = zip(
-                *tqdm(
-                    thread_map(
-                        lambda sample: (sample["images"][0], sample["conversations"][1]["value"]),
-                        read_ds,
-                        max_workers=multiprocessing.cpu_count(),
-                    ),
-                    total=len(read_ds),
-                ),
-                strict=True,
-            )
+            img_paths = [sample["images"][0] for sample in read_ds]
+            labels = [sample["conversations"][1]["value"] for sample in read_ds]
 
             ## run
             img_batches = list(chunked(img_paths, MAX_NUM_SEQS))
@@ -1073,7 +1130,8 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                preds = ft_pred_ink.map(img_batches)
+                lst_preds = ft_pred_ink.map(img_batches)
+                preds = [item for lst in lst_preds for item in lst]
 
             print(f"{split} CER: {compute_cer(labels, preds)*100:.1f} %")
 
@@ -1086,6 +1144,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     ],
                     strict=False,
                 )
+                print(f"Generated {len(img_paths)} DPO samples for {split} split")
                 write_dpo_json(DPO_TRAIN_JSON, img_paths, preds, labels)
 
 

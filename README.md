@@ -205,7 +205,7 @@ make sync
 Label subset of data (~1k samples) to train writing quality classifier:
 
 ```bash
-uv run training/etl.py --cls
+uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/etl.py --cls
 ```
 
 or
@@ -229,7 +229,7 @@ modal run training/train.py --cls
 Use trained classifier to filter train/val/test data (~10k samples) to train VLM using SFT:
 
 ```bash
-uv run training/etl.py --sft
+uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/etl.py --sft
 ```
 
 or
@@ -265,7 +265,7 @@ modal run training/quantize.py --sft
 Run trained VLM on train data and construct new dataset with only relabelled incorrect examples (~1k samples) for DPO training:
 
 ```bash
-uv run training/etl.py --dpo
+uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/etl.py --dpo
 ```
 
 or
