@@ -205,7 +205,7 @@ make sync
 Label subset of data (~1k samples) to train writing quality classifier:
 
 ```bash
-uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/etl.py --cls
+uv run training/etl.py --cls
 ```
 
 or
@@ -229,7 +229,7 @@ modal run training/train.py --cls
 Use trained classifier to filter train/val/test data (~10k samples) to train VLM using SFT:
 
 ```bash
-uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/etl.py --sft
+uv run training/etl.py --sft
 ```
 
 or
@@ -241,7 +241,7 @@ modal run training/etl.py --sft
 Run SFT:
 
 ```bash
-cd training && uv sync && cd LLaMA-Factory && uv pip install -e ".[torch,metrics]" && uv pip install flash-attn==2.7.2.post1 --no-build-isolation && cd .. && FORCE_TORCHRUN=1 uv run train.py --sft && cd ..
+cd training && uv sync && cd LLaMA-Factory && uv pip install -e ".[torch,metrics]" && cd .. && FORCE_TORCHRUN=1 uv run train.py --sft && cd ..
 ```
 
 or
@@ -253,7 +253,7 @@ modal run training/train.py --sft
 Quantize the SFT model:
 
 ```bash
-uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/quantize.py --sft
+uv run training/quantize.py --sft
 ```
 
 or
@@ -265,7 +265,7 @@ modal run training/quantize.py --sft
 Run trained VLM on train data and construct new dataset with only relabelled incorrect examples (~1k samples) for DPO training:
 
 ```bash
-uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/etl.py --dpo
+uv run training/etl.py --dpo
 ```
 
 or
@@ -277,7 +277,7 @@ modal run training/etl.py --dpo
 Run DPO:
 
 ```bash
-cd training && uv sync && cd LLaMA-Factory && uv pip install -e ".[torch,metrics]" && uv pip install flash-attn==2.7.2.post1 --no-build-isolation && cd .. && FORCE_TORCHRUN=1 uv run train.py --dpo && cd ..
+cd training && uv sync && cd LLaMA-Factory && uv pip install -e ".[torch,metrics]" && cd .. && FORCE_TORCHRUN=1 uv run train.py --dpo && cd ..
 ```
 
 or
@@ -289,7 +289,7 @@ modal run training/train.py --dpo
 Quantize the DPO model:
 
 ````bash
-uv pip install flash-attn==2.7.2.post1 --no-build-isolation && uv run training/quantize.py --dpo
+uv run training/quantize.py --dpo
 ``
 
 or

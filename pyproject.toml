@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.2.1",
     "alembic>=1.14.0",
+    "autoawq>=0.2.7.post3",
     "bitsandbytes>=0.45.1",
     "blobfile>=3.0.0",
     "boto>=2.49.0",
@@ -30,6 +31,7 @@ dependencies = [
     "python-fasthtml==0.6.10",
     "python-magic>=0.4.27",
     "requests==2.32.3",
+    "s3fs>=2024.9.0",
     "safetensors>=0.5.1",
     "sentencepiece>=0.2.0",
     "simpleicons==7.21.0",
@@ -47,12 +49,14 @@ dependencies = [
     "wandb>=0.19.4",
     "wheel==0.41.2",
     "transformers>=4.48.2",
-    "autoawq>=0.2.7.post3",
-    "s3fs>=2024.9.0",
     "jiwer>=3.1.0",
     "lark-parser>=0.12.0",
     "vllm>=0.7.1",
     "outlines>=0.1.11",
+    "hatchling>=1.22.5",
+    "editables>=0.5",
+    "deepspeed>=0.16.3",
+    "flash-attn>=2.7.4.post1",
 ]
 
 [project.scripts]
