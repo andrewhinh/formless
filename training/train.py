@@ -91,6 +91,10 @@ seed = 42  # random seed (default: 42)
 random.seed(seed)
 load_dotenv(".env" if IN_PROD else ".env.dev")
 
+api = HfApi()
+user_info = api.whoami(token=os.getenv("HF_TOKEN"))
+HF_USERNAME = user_info["name"]
+
 
 # -----------------------------------------------------------------------------
 
@@ -396,7 +400,7 @@ sft_config = {
     "include_effective_tokens_per_second": True,
     ### train
     "per_device_train_batch_size": 1,
-    "gradient_accumulation_steps": 2,
+    "gradient_accumulation_steps": 8,
     "learning_rate": 1.0e-4,
     "num_train_epochs": 5.0,
     "lr_scheduler_type": "cosine",
@@ -439,7 +443,7 @@ DPO_MERGE_YAML = "qwen2vl_lora_dpo_merge.yaml"
 
 dpo_train_config = {
     ### model
-    "model_name_or_path": f"{RUNS_VOL_PATH}/{SFT_MODEL}-merged",
+    "model_name_or_path": f"{HF_USERNAME}/{SFT_MODEL}-merged",
     "image_resolution": 262144,
     "video_resolution": 16384,
     "trust_remote_code": True,
@@ -447,13 +451,14 @@ dpo_train_config = {
     "stage": "dpo",
     "do_train": True,
     "finetuning_type": "lora",
+    "lora_rank": 8,
     "lora_target": "all",
     "pref_beta": 0.1,
     "pref_loss": "sigmoid",  # choices: [sigmoid (dpo), orpo, simpo]
     ### dataset
     "dataset": "dpo",
     "template": "qwen2_vl",
-    "cutoff_len": 4096,
+    "cutoff_len": 1024,
     "max_samples": 1000,
     "overwrite_cache": True,
     "preprocessing_num_workers": 16,  # 16 = max
@@ -1303,11 +1308,8 @@ def push_to_hub(local_dir: str, model_name: str):
         local_dir, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto"
     )
     processor = AutoProcessor.from_pretrained(local_dir)
-    api = HfApi()
-    user_info = api.whoami(token=os.getenv("HF_TOKEN"))
-    username = user_info["name"]
-    model.push_to_hub(username + "/" + model_name)
-    processor.push_to_hub(username + "/" + model_name)
+    model.push_to_hub(HF_USERNAME + "/" + model_name)
+    processor.push_to_hub(HF_USERNAME + "/" + model_name)
 
 
 # -----------------------------------------------------------------------------

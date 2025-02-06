@@ -711,11 +711,16 @@ def tokenize_expression(s: str) -> list[str]:
     tokens = []
     while s:
         if s[0] == "\\":
-            tokens.append(_COMMAND_RE.match(s).group(0))
+            match = _COMMAND_RE.match(s)
+            if match:
+                tokens.append(match.group(0))
+                s = s[len(tokens[-1]) :]
+            else:
+                tokens.append(s[0])
+                s = s[1:]
         else:
             tokens.append(s[0])
-
-        s = s[len(tokens[-1]) :]
+            s = s[1:]
 
     return tokens
 
@@ -736,7 +741,7 @@ def pretrained_pred_ink(img_paths: list[Path]) -> list[str]:
         SLOW_RATER,
         DEFAULT_QUESTION,
         MAX_VLM_TOKENS,
-        GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
+        # GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
     )
 
 
@@ -804,7 +809,7 @@ def ft_pred_ink(img_paths: list[Path]) -> list[str]:
         SLOW_RUNNER,
         DEFAULT_QUESTION,
         MAX_VLM_TOKENS,
-        GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
+        # GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
     )
 
 
