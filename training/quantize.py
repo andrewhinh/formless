@@ -3,6 +3,7 @@
 import json
 import multiprocessing
 import os
+import random
 
 import modal
 import torch
@@ -16,6 +17,8 @@ from tqdm.contrib.concurrent import thread_map
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
 from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, PARENT_PATH, RUNS_VOLUME, SECRETS, VOLUME_CONFIG
+
+random.seed(42)
 
 api = HfApi()
 user_info = api.whoami(token=os.getenv("HF_TOKEN"))
@@ -31,6 +34,8 @@ if modal.is_local():
 else:
     DATA_VOL_PATH = f"/{DATA_VOLUME}"
     RUNS_VOL_PATH = f"/{RUNS_VOLUME}"
+CALIBRATION_DATA = f"{DATA_VOL_PATH}/sft_valid.json"
+MAX_SAMPLES = 3
 
 # -----------------------------------------------------------------------------
 
@@ -39,7 +44,6 @@ else:
 SFT_PROCESSOR = "Qwen/Qwen2-VL-7B-Instruct"
 SFT_MODEL = "qwen2-vl-7b-instruct-lora-sft-merged"
 SFT_HF_MODEL = f"{USERNAME}/{SFT_MODEL}"  # pretrained model or ckpt
-SFT_CALIBRATION_DATA = f"{DATA_VOL_PATH}/sft_valid.json"
 SFT_QUANT_CONFIG = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": "GEMM"}
 SFT_SAVE_PATH = f"{RUNS_VOL_PATH}/{SFT_MODEL}-awq"
 SFT_SAVE_HUB = f"{USERNAME}/{SFT_MODEL}-awq"
@@ -51,7 +55,6 @@ SFT_SAVE_HUB = f"{USERNAME}/{SFT_MODEL}-awq"
 DPO_PROCESSOR = "Qwen/Qwen2-VL-7B-Instruct"
 DPO_MODEL = "qwen2-vl-7b-instruct-lora-dpo-merged"
 DPO_HF_MODEL = f"{USERNAME}/{DPO_MODEL}"
-DPO_CALIBRATION_DATA = f"{DATA_VOL_PATH}/dpo_valid.json"
 DPO_QUANT_CONFIG = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": "GEMM"}
 DPO_SAVE_PATH = f"{RUNS_VOL_PATH}/{DPO_MODEL}-awq"
 DPO_SAVE_HUB = f"{USERNAME}/{DPO_MODEL}-awq"
@@ -151,31 +154,31 @@ class Qwen2VLAwqQuantizer(AwqQuantizer):
 
 
 def cal_data(sample: dict) -> list[dict]:
-    for idx, message in enumerate(sample["messages"]):
-        if message["role"] == "user" and "<image>" in message["content"]:
+    for idx, message in enumerate(sample["conversations"]):
+        if message["from"] == "human" and "<image>" in message["value"]:
             image_path = sample["images"][0]  # Assuming one image per message
             user_content = [
                 {"type": "image", "image": f"file://{os.path.abspath(image_path)}"},
-                {"type": "text", "text": message["content"].replace("<image>", "").strip()},
+                {"type": "text", "text": message["value"].replace("<image>", "").strip()},
             ]
             return [
                 {"role": "user", "content": user_content},
-                {"role": "assistant", "content": sample["messages"][idx + 1]["content"]},
+                {"role": "assistant", "content": sample["conversations"][idx + 1]["value"]},
             ]
         else:
             return [
-                {"role": message["role"], "content": message["content"]},
+                {"role": message["from"], "content": message["value"]},
             ]
 
 
-def helper(processor, model, calibration_data, quant_config, save_path, save_hub):
+def helper(processor, model, quant_config, save_path, save_hub):
     processor = AutoProcessor.from_pretrained(processor)
     model = AutoAWQForCausalLM.from_pretrained(
         model, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto"
     )
 
     # load calibration data
-    with open(calibration_data, "r") as f:
+    with open(CALIBRATION_DATA, "r") as f:
         read_ds = json.load(f)
 
     cal_ds = list(
@@ -188,6 +191,8 @@ def helper(processor, model, calibration_data, quant_config, save_path, save_hub
             total=len(read_ds),
         )
     )
+    random.shuffle(cal_ds)
+    cal_ds = cal_ds[:MAX_SAMPLES]
 
     # process the dataset into tensors
     text = processor.apply_chat_template(cal_ds, tokenize=False, add_generation_prompt=True)
@@ -216,7 +221,6 @@ def main(sft: bool, dpo: bool):
         helper(
             SFT_PROCESSOR,
             SFT_HF_MODEL,
-            SFT_CALIBRATION_DATA,
             SFT_QUANT_CONFIG,
             SFT_SAVE_PATH,
             SFT_SAVE_HUB,
@@ -225,7 +229,6 @@ def main(sft: bool, dpo: bool):
         helper(
             DPO_PROCESSOR,
             DPO_HF_MODEL,
-            DPO_CALIBRATION_DATA,
             DPO_QUANT_CONFIG,
             DPO_SAVE_PATH,
             DPO_SAVE_HUB,

@@ -489,7 +489,7 @@ with open(f"{TRAIN_REPO_PATH}/{DPO_YAML}", "w") as f:
 
 dpo_merge_config = {
     ### model
-    "model_name_or_path": BASE_MODEL,
+    "model_name_or_path": f"{HF_USERNAME}/{SFT_MODEL}-merged",
     "adapter_name_or_path": f"{RUNS_VOL_PATH}/{DPO_MODEL}",
     "template": "qwen2_vl",
     "finetuning_type": "lora",
