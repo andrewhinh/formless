@@ -66,7 +66,7 @@ IMAGE = GPU_IMAGE.pip_install(
     "autoawq==0.2.7.post3",
     "torchvision==0.20.1",
 )
-QUANTIZE_TIMEOUT = 24 * 60 * MINUTES
+TIMEOUT = 24 * 60 * MINUTES
 
 GPU_TYPE = "h100"
 GPU_COUNT = 1
@@ -217,6 +217,9 @@ def helper(processor, model, quant_config, save_path, save_hub):
 
 
 def main(sft: bool, dpo: bool):
+    if not sft and not dpo:
+        raise ValueError("Must specify at least one of `sft` or `dpo`")
+
     if sft:
         helper(
             SFT_PROCESSOR,
@@ -240,7 +243,7 @@ def main(sft: bool, dpo: bool):
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=QUANTIZE_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def run(sft: bool, dpo: bool):
     main(sft, dpo)

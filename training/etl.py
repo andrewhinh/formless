@@ -8,7 +8,6 @@ import math
 import multiprocessing
 import os
 import random
-import re
 from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
@@ -18,7 +17,6 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import cairo
-import jiwer
 import modal
 import numpy as np
 import torch
@@ -102,49 +100,49 @@ STOP_TOKEN_IDS = []
 MAX_SCORE_TOKENS = 3
 MAX_VLM_TOKENS = 2048
 
-LATEX_GRAMMER = """
-start: math_expr
+# LATEX_GRAMMER = """
+# start: math_expr
 
-math_expr: inline_math | display_math
+# math_expr: inline_math | display_math
 
-inline_math: "$" expr "$"
-display_math: BEGIN "{" ENV "}" expr END "{" ENV "}"
+# inline_math: "$" expr "$"
+# display_math: BEGIN "{" ENV "}" expr END "{" ENV "}"
 
-?expr: term
-     | expr operator term   -> binop
+# ?expr: term
+#      | expr operator term   -> binop
 
-?term: NUMBER
-     | VARIABLE
-     | function
-     | "{" expr "}"
-     | FRAC "{" expr "}" "{" expr "}"
+# ?term: NUMBER
+#      | VARIABLE
+#      | function
+#      | "{" expr "}"
+#      | FRAC "{" expr "}" "{" expr "}"
 
-function: SIN "(" expr ")"
-        | COS "(" expr ")"
-        | TAN "(" expr ")"
-        | LOG "(" expr ")"
-        | EXP "(" expr ")"
-        | SQRT "{" expr "}"
+# function: SIN "(" expr ")"
+#         | COS "(" expr ")"
+#         | TAN "(" expr ")"
+#         | LOG "(" expr ")"
+#         | EXP "(" expr ")"
+#         | SQRT "{" expr "}"
 
-operator: "+" | "-" | "*" | "/" | "=" | "^"
+# operator: "+" | "-" | "*" | "/" | "=" | "^"
 
-BEGIN: "\\begin"
-END: "\\end"
-FRAC: "\\frac"
-SIN: "\\sin"
-COS: "\\cos"
-TAN: "\\tan"
-LOG: "\\log"
-EXP: "\\exp"
-SQRT: "\\sqrt"
+# BEGIN: "\\begin"
+# END: "\\end"
+# FRAC: "\\frac"
+# SIN: "\\sin"
+# COS: "\\cos"
+# TAN: "\\tan"
+# LOG: "\\log"
+# EXP: "\\exp"
+# SQRT: "\\sqrt"
 
-ENV: /[a-zA-Z]+/
+# ENV: /[a-zA-Z]+/
 
-%import common.NUMBER
-%import common.CNAME -> VARIABLE
-%import common.WS
-%ignore WS
-"""
+# %import common.NUMBER
+# %import common.CNAME -> VARIABLE
+# %import common.WS
+# %ignore WS
+# """
 
 
 # -----------------------------------------------------------------------------
@@ -353,7 +351,7 @@ IMAGE = (
         volumes=VOLUME_CONFIG,
     )
 )
-ETL_TIMEOUT = 24 * 60 * MINUTES
+TIMEOUT = 24 * 60 * MINUTES
 
 GPU_TYPE = "l4"
 GPU_SIZE = None  # options = None, "40GB", "80GB"
@@ -458,7 +456,7 @@ def render_ink(
     image=IMAGE,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def extract_ink_metadata(input_path: Path) -> dict[Path, str]:
     """
@@ -553,7 +551,7 @@ def run_model(
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def analyze_inks(img_paths: list[Path]) -> list[int]:
     """
@@ -579,7 +577,7 @@ def analyze_inks(img_paths: list[Path]) -> list[int]:
     image=IMAGE,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def classify_ink(img_paths: list[Path]) -> list[int]:
     """
@@ -627,7 +625,7 @@ def compute_minhash(phash_str):
     image=IMAGE,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def stitch_imgs(img_paths: list[Path]) -> Path:
     """
@@ -694,75 +692,6 @@ def stitch_imgs(img_paths: list[Path]) -> Path:
     return save_path
 
 
-def tokenize_expression(s: str) -> list[str]:
-    r"""Transform a Latex math string into a list of tokens.
-
-    Tokens are strings that are meaningful in the context of Latex
-    e.g. '1', r'\alpha', r'\frac'.
-
-    Args:
-        s: unicode input string (ex: r"\frac{1}{2}")
-
-    Returns
-    -------
-        tokens: list of tokens as unicode strings.
-    """
-    _COMMAND_RE = re.compile(r"\\(mathbb{[a-zA-Z]}|begin{[a-z]+}|end{[a-z]+}|operatorname\*|[a-zA-Z]+|.)")
-    tokens = []
-    while s:
-        if s[0] == "\\":
-            match = _COMMAND_RE.match(s)
-            if match:
-                tokens.append(match.group(0))
-                s = s[len(tokens[-1]) :]
-            else:
-                tokens.append(s[0])
-                s = s[1:]
-        else:
-            tokens.append(s[0])
-            s = s[1:]
-
-    return tokens
-
-
-@app.function(
-    image=IMAGE,
-    gpu=GPU_CONFIG,
-    volumes=VOLUME_CONFIG,
-    secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
-)
-def pretrained_pred_ink(img_paths: list[Path]) -> list[str]:
-    """
-    Run pretrained VLM on ink(s).
-    """
-    return run_model(
-        img_paths,
-        SLOW_RATER,
-        DEFAULT_QUESTION,
-        MAX_VLM_TOKENS,
-        # GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
-    )
-
-
-def compute_cer(gt: list[str], output: list[str]) -> float:
-    """Computes CER given pairs of ground truth and model output."""
-
-    class TokenizeTransform(jiwer.transforms.AbstractTransform):
-        def process_string(self, s: str):
-            return tokenize_expression(r"{}".format(s))
-
-        def process_list(self, tokens: list[str]):
-            return [self.process_string(token) for token in tokens]
-
-    return jiwer.cer(
-        truth=gt,
-        hypothesis=output,
-        reference_transform=TokenizeTransform(),
-        hypothesis_transform=TokenizeTransform(),
-    )
-
-
 def write_sft_json(json_path: Path, img_paths: list, labels: list):
     with open(json_path, "w") as f:
         json.dump(
@@ -798,7 +727,7 @@ def write_sft_json(json_path: Path, img_paths: list, labels: list):
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def ft_pred_ink(img_paths: list[Path]) -> list[str]:
     """
@@ -1045,9 +974,8 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
         for update_df in df_parts[1:]:
             split_df = split_df.unionByName(update_df)
 
-        # randomly stitch samples together + determine CER
-        img_paths, labels, preds = (
-            {split: [] for split in SPLITS},
+        # randomly stitch samples together
+        img_paths, labels = (
             {split: [] for split in SPLITS},
             {split: [] for split in SPLITS},
         )
@@ -1089,34 +1017,17 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 else:
                     stitched_img_paths = stitch_imgs.map(path_batches)
 
-                ## get preds
-                prds = []
-                img_batches = list(chunked(stitched_img_paths, MAX_NUM_SEQS))
-                if modal.is_local():
-                    prds = list(
-                        tqdm(
-                            chain.from_iterable(pretrained_pred_ink.local(batch) for batch in img_batches),
-                            desc=split,
-                            total=len(img_batches),
-                        )
-                    )
-                else:
-                    lst_prds = pretrained_pred_ink.map(img_batches)
-                    prds = [item for lst in lst_prds for item in lst]
-
                 img_paths[split].extend(stitched_img_paths)
                 labels[split].extend(combined_labels)
-                preds[split].extend(prds)
 
             print(f"Generated {N_SAMPLES_PER_SPLIT_SFT[split]} samples for {split} split")
-            print(f"{split} CER: {compute_cer(labels[split], preds[split])*100:.1f} %")
 
         # write to json
         write_sft_json(SFT_TRAIN_JSON, img_paths["train"], labels["train"])
         write_sft_json(SFT_VAL_JSON, img_paths["valid"], labels["valid"])
         write_sft_json(SFT_TEST_JSON, img_paths["test"], labels["test"])
     if dpo:
-        # run model to determine CER + which train samples it fails on
+        # run model to determine which train samples it fails on
         for split in SPLITS:
             json_path = SFT_TRAIN_JSON if split == "train" else SFT_VAL_JSON if split == "valid" else SFT_TEST_JSON
             with open(json_path, "r") as f:
@@ -1138,8 +1049,6 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 lst_preds = ft_pred_ink.map(img_batches)
                 preds = [item for lst in lst_preds for item in lst]
 
-            print(f"{split} CER: {compute_cer(labels, preds)*100:.1f} %")
-
             if split == "train":
                 img_paths, labels, preds = zip(
                     *[
@@ -1157,7 +1066,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
     image=IMAGE,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=ETL_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def run(cls: bool, sft: bool, dpo: bool):
     main(cls, sft, dpo)

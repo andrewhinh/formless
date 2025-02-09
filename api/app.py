@@ -42,7 +42,7 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = "andrewhinh/qwen2-vl-7b-instruct-full-sft-awq"  # pretrained model or ckpt
+MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-dpo-awq"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
 QUANTIZATION = "awq_marlin"  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
@@ -52,11 +52,11 @@ MAX_NUM_SEQS = 1
 
 MIN_PIXELS = 28 * 28
 MAX_PIXELS = 1280 * 28 * 28
-TEMPERATURE = 0.2
+TEMPERATURE = 0.0
 TOP_P = 0.001
 REPEATION_PENALTY = 1.05
-MAX_TOKENS = 1024
 STOP_TOKEN_IDS = []
+MAX_MODEL_LEN = 16384
 
 MAX_FILE_SIZE_MB = 5
 MAX_DIMENSIONS = (4096, 4096)
@@ -120,6 +120,7 @@ def get_app():  # noqa: C901
         max_num_seqs=MAX_NUM_SEQS,
         tensor_parallel_size=GPU_COUNT,
         trust_remote_code=True,
+        max_model_len=MAX_MODEL_LEN,
         mm_processor_kwargs={
             "min_pixels": MIN_PIXELS,
             "max_pixels": MAX_PIXELS,
@@ -131,7 +132,6 @@ def get_app():  # noqa: C901
         temperature=TEMPERATURE,
         top_p=TOP_P,
         repetition_penalty=REPEATION_PENALTY,
-        max_tokens=MAX_TOKENS,
         stop_token_ids=STOP_TOKEN_IDS,
     )
 

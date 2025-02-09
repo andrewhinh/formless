@@ -287,7 +287,7 @@ IMAGE = (
         }
     )
 )
-TRAIN_TIMEOUT = 24 * 60 * MINUTES
+TIMEOUT = 24 * 60 * MINUTES
 
 GPU_TYPE = "H100"
 GPU_COUNT = 1
@@ -1387,7 +1387,7 @@ def main(cls: bool, sft: bool, dpo: bool):
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=TRAIN_TIMEOUT,
+    timeout=TIMEOUT,
 )
 def run(cls: bool, sft: bool, dpo: bool):
     main(cls, sft, dpo)

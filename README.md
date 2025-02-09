@@ -32,6 +32,56 @@ scan(image_url="<image-url>", verbose=1)
 scan(image_path="<local-image-path>", verbose=1)
 ```
 
+## Training results
+
+Base model:
+
+```bash
+train CER: 0.9673
+valid CER: 0.9606
+test CER: 0.9961
+```
+
+Base quant model:
+
+```bash
+train CER: 0.9680
+valid CER: 0.9622
+test CER: 0.9984
+```
+
+SFT model:
+
+```bash
+train CER: 0.9771
+valid CER: 0.9850
+test CER: 0.9851
+```
+
+SFT quant model:
+
+```bash
+train CER: 0.9647
+valid CER: 0.9611
+test CER: 0.9763
+```
+
+DPO model:
+
+```bash
+train CER: 0.9772
+valid CER: 0.9846
+test CER: 0.9850
+```
+
+DPO quant model:
+
+```bash
+train CER: 0.9774
+valid CER: 0.9849
+test CER: 0.9859
+```
+
 ## Development
 
 ### Set Up
@@ -46,6 +96,7 @@ Create a `.env` (+ `.env.dev`):
 
 ```bash
 HF_TOKEN=
+OPENAI_API_KEY=
 
 POSTGRES_URL=
 POSTGRES_PRISMA_URL=
@@ -75,7 +126,6 @@ WANDB_ENTITY=
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=
-OPENAI_API_KEY=
 ```
 
 ### Useful Tips
@@ -93,6 +143,7 @@ Visit `http://localhost:4040/` to see the Spark UI when running `training/etl.py
 ```bash
 .
 ├── api                 # API.
+├── db                  # database.
 ├── frontend            # frontend.
 ├── src/formless        # python bindings.
 ├── training            # training.
@@ -238,6 +289,30 @@ or
 modal run training/etl.py --sft
 ```
 
+Eval base model:
+
+```bash
+uv run training/eval.py --base
+```
+
+or
+
+```bash
+modal run training/eval.py --base
+```
+
+Eval quantized base model:
+
+```bash
+uv run training/eval.py --base --quant
+```
+
+or
+
+```bash
+modal run training/eval.py --base --quant
+```
+
 Run SFT:
 
 ```bash
@@ -250,6 +325,18 @@ or
 modal run training/train.py --sft
 ```
 
+Eval SFT model:
+
+```bash
+uv run training/eval.py --sft
+```
+
+or
+
+```bash
+modal run training/eval.py --sft
+```
+
 Quantize the SFT model:
 
 ```bash
@@ -260,6 +347,18 @@ or
 
 ```bash
 modal run training/quantize.py --sft
+```
+
+Eval quantized SFT model:
+
+```bash
+uv run training/eval.py --sft --quant
+```
+
+or
+
+```bash
+modal run training/eval.py --sft --quant
 ```
 
 Run trained VLM on train data and construct new dataset with only relabelled incorrect examples (~1k samples) for DPO training:
@@ -286,15 +385,38 @@ or
 modal run training/train.py --dpo
 ```
 
-Quantize the DPO model:
+Eval DPO model:
 
-````bash
-uv run training/quantize.py --dpo
-``
+```bash
+uv run training/eval.py --dpo
+```
 
 or
 
+```bash
+modal run training/eval.py --dpo
+```
+
+Quantize the DPO model:
+
+```bash
+uv run training/quantize.py --dpo
+```
+
+or
 
 ```bash
 modal run training/quantize.py --dpo
-````
+```
+
+Eval quantized DPO model:
+
+```bash
+uv run training/eval.py --dpo --quant
+```
+
+or
+
+```bash
+modal run training/eval.py --dpo --quant
+```
