@@ -812,7 +812,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                split_stats = extract_ink_metadata.map(ink_paths)
+                split_stats = list(extract_ink_metadata.map(ink_paths))
 
             # write to df
             split_df = spark.createDataFrame(
@@ -859,7 +859,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                scores = analyze_inks.map(img_batches)
+                scores = list(analyze_inks.map(img_batches))
 
             ## save to write later
             split_df = spark.createDataFrame(
@@ -911,7 +911,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                lst_scores = classify_ink.map(img_batches)
+                lst_scores = list(classify_ink.map(img_batches))
             scores = [item for lst in lst_scores for item in lst]
 
             ## save to write later
@@ -1013,7 +1013,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                         )
                     )
                 else:
-                    stitched_img_paths = stitch_imgs.map(path_batches)
+                    stitched_img_paths = list(stitch_imgs.map(path_batches))
 
                 img_paths[split].extend(stitched_img_paths)
                 labels[split].extend(combined_labels)
@@ -1044,7 +1044,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                lst_preds = ft_pred_ink.map(img_batches)
+                lst_preds = list(ft_pred_ink.map(img_batches))
                 preds = [item for lst in lst_preds for item in lst]
 
             if split == "train":
