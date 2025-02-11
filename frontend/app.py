@@ -34,10 +34,10 @@ from db.models import (
     init_balance,
 )
 from utils import (
+    APP_NAME,
     DB_VOLUME,
     IN_PROD,
     MINUTES,
-    NAME,
     PARENT_PATH,
     PYTHON_VERSION,
     SECRETS,
@@ -65,7 +65,7 @@ def get_app():  # noqa: C901
         message = "Page not found!"
         typing_steps = len(message)
         return (
-            fh.Title(NAME + " | 404"),
+            fh.Title(APP_NAME + " | 404"),
             fh.Div(
                 nav(),
                 fh.Main(
@@ -642,7 +642,7 @@ def get_app():  # noqa: C901
     def nav():
         return fh.Nav(
             fh.A(
-                f"{NAME}",
+                f"{APP_NAME}",
                 href="/",
                 cls="text-xl text-blue-300 hover:text-blue-100 font-mono font-family:Consolas, Monaco, 'Lucida Console', 'Liberation Mono', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', 'Courier New'",
             ),
@@ -1015,7 +1015,7 @@ def get_app():  # noqa: C901
         session,
     ):
         return (
-            fh.Title(NAME),
+            fh.Title(APP_NAME),
             fh.Div(
                 nav(),
                 main_content(session),
@@ -1040,7 +1040,7 @@ def get_app():  # noqa: C901
         session,
     ):
         return (
-            fh.Title(NAME + " | " + "developer"),
+            fh.Title(APP_NAME + " | " + "developer"),
             fh.Div(
                 nav(),
                 developer_page(session),
@@ -1659,8 +1659,7 @@ FE_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
 FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 
-APP_NAME = f"{NAME}-frontend"
-app = modal.App(APP_NAME)
+app = modal.App(f"{APP_NAME}-frontend")
 
 # -----------------------------------------------------------------------------
 

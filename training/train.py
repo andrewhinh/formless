@@ -47,7 +47,17 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
-from utils import DATA_VOLUME, GPU_IMAGE, IN_PROD, MINUTES, NAME, RUNS_VOLUME, SECRETS, VOLUME_CONFIG, _exec_subprocess
+from utils import (
+    APP_NAME,
+    DATA_VOLUME,
+    GPU_IMAGE,
+    IN_PROD,
+    MINUTES,
+    RUNS_VOLUME,
+    SECRETS,
+    VOLUME_CONFIG,
+    _exec_subprocess,
+)
 
 try:
     from apex import amp
@@ -296,8 +306,7 @@ GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
-APP_NAME = f"{NAME}-train"
-app = modal.App(name=APP_NAME)
+app = modal.App(name=f"{APP_NAME}-train")
 
 
 ## dataset_info.json

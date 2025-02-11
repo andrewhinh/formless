@@ -14,12 +14,13 @@ from tqdm import tqdm
 from vllm import LLM, SamplingParams
 
 from utils import (
+    APP_NAME,
     DATA_VOLUME,
     DEFAULT_QUESTION,
     DEFAULT_SYSTEM_PROMPT,
     GPU_IMAGE,
+    HF_USERNAME,
     MINUTES,
-    NAME,
     PARENT_PATH,
     SECRETS,
     VOLUME_CONFIG,
@@ -46,10 +47,10 @@ SFT_TEST_JSON = Path(f"{DATA_VOL_PATH}/sft_test.json")
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"
 BASE_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
 BASE_QUANT_MODEL = "Qwen/Qwen2-VL-7B-Instruct-AWQ"
-SFT_MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-sft-merged"
-SFT_QUANT_MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-sft-merged-awq"
-DPO_MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-dpo-merged"
-DPO_QUANT_MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-dpo-merged-awq"
+SFT_MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged"
+SFT_QUANT_MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged-awq"
+DPO_MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-dpo-merged"
+DPO_QUANT_MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-dpo-merged-awq"
 
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
 ENFORCE_EAGER = False
@@ -149,8 +150,7 @@ GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
-APP_NAME = f"{NAME}-eval"
-app = modal.App(name=APP_NAME)
+app = modal.App(name=f"{APP_NAME}-eval")
 
 # -----------------------------------------------------------------------------
 

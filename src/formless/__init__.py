@@ -11,7 +11,7 @@ import typer
 from typing_extensions import Annotated
 
 
-DEFAULT_IMG_URL = "https://formless-data.s3.us-west-1.amazonaws.com/train/00001d1472a8709f.png"
+DEFAULT_IMG_URL = "https://www.researchgate.net/publication/328401414/figure/fig1/AS:941482479472661@1601478323514/Handwritten-mathematical-expression-example.png"
 API_URL = "https://bit.ly/formless-api"
 
 # Typer CLI

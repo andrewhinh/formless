@@ -43,13 +43,14 @@ from vllm import LLM, SamplingParams
 from vllm.sampling_params import GuidedDecodingParams
 
 from utils import (
+    APP_NAME,
     DATA_VOLUME,
     DEFAULT_QUESTION,
     DEFAULT_SYSTEM_PROMPT,
     GPU_IMAGE,
+    HF_USERNAME,
     IN_PROD,
     MINUTES,
-    NAME,
     PARENT_PATH,
     SECRETS,
     VOLUME_CONFIG,
@@ -174,7 +175,7 @@ Return the difficulty of the expression as a number between 1 and 3 where
 
 # sft training data config
 
-FAST_RATER = "hf_hub:andrewhinh/resnet152-cls"
+FAST_RATER = f"hf_hub:{HF_USERNAME}/{APP_NAME}-resnet152-difficulty"
 CLS_RUN_BS = 2048  # max on RTX 3090
 
 ## imports
@@ -246,8 +247,8 @@ SFT_TEST_JSON = Path(f"{DATA_VOL_PATH}/sft_test.json")
 
 # dpo training data config
 
-SLOW_RUNNER = "andrewhinh/qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained model or ckpt
-SLOW_RUNNER_TOKENIZER = "andrewhinh/qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained tokenizer
+SLOW_RUNNER = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained model or ckpt
+SLOW_RUNNER_TOKENIZER = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained tokenizer
 DPO_TRAIN_JSON = Path(f"{DATA_VOL_PATH}/dpo_train.json")
 
 # -----------------------------------------------------------------------------
@@ -359,8 +360,7 @@ GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
-APP_NAME = f"{NAME}-etl"
-app = modal.App(name=APP_NAME)
+app = modal.App(name=f"{APP_NAME}-etl")
 
 # -----------------------------------------------------------------------------
 

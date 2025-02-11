@@ -4,13 +4,17 @@ import warnings
 from pathlib import Path, PurePosixPath
 
 import modal
+from huggingface_hub import HfApi
 
-NAME = "formless"
-DEFAULT_IMG_URL = "https://formless-data.s3.us-west-1.amazonaws.com/train/00001d1472a8709f.png"
+APP_NAME = "formless"
+DEFAULT_IMG_URL = "https://www.researchgate.net/publication/328401414/figure/fig1/AS:941482479472661@1601478323514/Handwritten-mathematical-expression-example.png"
 PARENT_PATH = Path(__file__).parent
 DEFAULT_IMG_PATH = PARENT_PATH / "api" / "eg.png"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 DEFAULT_QUESTION = "What is the content of this image?"
+
+# HF
+HF_USERNAME = HfApi().whoami(token=os.getenv("HF_TOKEN"))["name"]
 
 # Modal
 IN_PROD = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
@@ -22,10 +26,10 @@ OS = "ubuntu22.04"
 TAG = f"nvidia/cuda:{CUDA_VERSION}-{FLAVOR}-{OS}"
 PYTHON_VERSION = "3.12"
 
-PRETRAINED_VOLUME = f"{NAME}-pretrained"
-DB_VOLUME = f"{NAME}-db"
-DATA_VOLUME = f"{NAME}-data"
-RUNS_VOLUME = f"{NAME}-runs"
+PRETRAINED_VOLUME = f"{APP_NAME}-pretrained"
+DB_VOLUME = f"{APP_NAME}-db"
+DATA_VOLUME = f"{APP_NAME}-data"
+RUNS_VOLUME = f"{APP_NAME}-runs"
 VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
     f"/{PRETRAINED_VOLUME}": modal.Volume.from_name(PRETRAINED_VOLUME, create_if_missing=True),
     f"/{DB_VOLUME}": modal.Volume.from_name(DB_VOLUME, create_if_missing=True),

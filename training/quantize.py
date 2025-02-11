@@ -11,18 +11,23 @@ import torch.nn as nn
 from awq import AutoAWQForCausalLM
 from awq.quantize.quantizer import AwqQuantizer, clear_memory, get_best_device
 from awq.utils.qwen_vl_utils import process_vision_info
-from huggingface_hub import HfApi
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
-from utils import DATA_VOLUME, GPU_IMAGE, MINUTES, NAME, PARENT_PATH, RUNS_VOLUME, SECRETS, VOLUME_CONFIG
+from utils import (
+    APP_NAME,
+    DATA_VOLUME,
+    GPU_IMAGE,
+    HF_USERNAME,
+    MINUTES,
+    PARENT_PATH,
+    RUNS_VOLUME,
+    SECRETS,
+    VOLUME_CONFIG,
+)
 
 random.seed(42)
-
-api = HfApi()
-user_info = api.whoami(token=os.getenv("HF_TOKEN"))
-USERNAME = user_info["name"]
 
 if modal.is_local():
     DATA_VOL_PATH = str(PARENT_PATH / "training" / "artifacts" / "mathwriting-2024")
@@ -43,10 +48,10 @@ MAX_SAMPLES = 3
 
 SFT_PROCESSOR = "Qwen/Qwen2-VL-7B-Instruct"
 SFT_MODEL = "qwen2-vl-7b-instruct-lora-sft-merged"
-SFT_HF_MODEL = f"{USERNAME}/{SFT_MODEL}"  # pretrained model or ckpt
+SFT_HF_MODEL = f"{HF_USERNAME}/{SFT_MODEL}"  # pretrained model or ckpt
 SFT_QUANT_CONFIG = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": "GEMM"}
 SFT_SAVE_PATH = f"{RUNS_VOL_PATH}/{SFT_MODEL}-awq"
-SFT_SAVE_HUB = f"{USERNAME}/{SFT_MODEL}-awq"
+SFT_SAVE_HUB = f"{HF_USERNAME}/{SFT_MODEL}-awq"
 
 # -----------------------------------------------------------------------------
 
@@ -54,10 +59,10 @@ SFT_SAVE_HUB = f"{USERNAME}/{SFT_MODEL}-awq"
 
 DPO_PROCESSOR = "Qwen/Qwen2-VL-7B-Instruct"
 DPO_MODEL = "qwen2-vl-7b-instruct-lora-dpo-merged"
-DPO_HF_MODEL = f"{USERNAME}/{DPO_MODEL}"
+DPO_HF_MODEL = f"{HF_USERNAME}/{DPO_MODEL}"
 DPO_QUANT_CONFIG = {"zero_point": True, "q_group_size": 128, "w_bit": 4, "version": "GEMM"}
 DPO_SAVE_PATH = f"{RUNS_VOL_PATH}/{DPO_MODEL}-awq"
-DPO_SAVE_HUB = f"{USERNAME}/{DPO_MODEL}-awq"
+DPO_SAVE_HUB = f"{HF_USERNAME}/{DPO_MODEL}-awq"
 
 # -----------------------------------------------------------------------------
 
@@ -75,8 +80,7 @@ GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
-APP_NAME = f"{NAME}-quantize"
-app = modal.App(name=APP_NAME)
+app = modal.App(name=f"{APP_NAME}-quantize")
 
 # -----------------------------------------------------------------------------
 

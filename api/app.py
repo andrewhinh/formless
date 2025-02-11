@@ -25,15 +25,16 @@ from vllm import LLM, SamplingParams
 
 from db.models import ApiKey, ApiKeyCreate
 from utils import (
+    APP_NAME,
     DB_VOLUME,
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
     DEFAULT_SYSTEM_PROMPT,
     GPU_IMAGE,
+    HF_USERNAME,
     IN_PROD,
     MINUTES,
-    NAME,
     PARENT_PATH,
     SECRETS,
     VOLUME_CONFIG,
@@ -42,7 +43,7 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = "andrewhinh/qwen2-vl-7b-instruct-lora-dpo-merged-awq"  # pretrained model or ckpt
+MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-dpo-merged-awq"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
 QUANTIZATION = "awq_marlin"  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
@@ -350,8 +351,7 @@ GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 if GPU_TYPE.lower() == "a100":
     GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
-APP_NAME = f"{NAME}-api"
-app = modal.App(name=APP_NAME)
+app = modal.App(name=f"{APP_NAME}-api")
 
 # -----------------------------------------------------------------------------
 
