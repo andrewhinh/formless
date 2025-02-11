@@ -303,8 +303,6 @@ GPU_TYPE = "H100"
 GPU_COUNT = 1
 GPU_SIZE = None  # options = None, "40GB", "80GB"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
-if GPU_TYPE.lower() == "a100":
-    GPU_CONFIG = modal.gpu.A100(count=GPU_COUNT, size=GPU_SIZE)
 
 app = modal.App(name=f"{APP_NAME}-train")
 
