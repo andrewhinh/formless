@@ -29,9 +29,21 @@ import yaml
 from dotenv import load_dotenv
 from huggingface_hub import HfApi, login
 from timm import utils
-from timm.data import AugMixDataset, FastCollateMixup, Mixup, create_dataset, create_loader, resolve_data_config
+from timm.data import (
+    AugMixDataset,
+    FastCollateMixup,
+    Mixup,
+    create_dataset,
+    create_loader,
+    resolve_data_config,
+)
 from timm.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
-from timm.loss import BinaryCrossEntropy, JsdCrossEntropy, LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
+from timm.loss import (
+    BinaryCrossEntropy,
+    JsdCrossEntropy,
+    LabelSmoothingCrossEntropy,
+    SoftTargetCrossEntropy,
+)
 from timm.models import (
     create_model,
     load_checkpoint,
@@ -195,7 +207,11 @@ min_lr = 0  # lower lr bound for cyclic schedulers that hit 0 (default: 0)
 epochs = 5  # number of epochs to train (default: 300)
 epoch_repeats = 0.0  # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).
 start_epoch = None  # manual epoch number (useful on restarts)
-decay_milestones = [90, 180, 270]  # list of decay epoch indices for multistep lr. must be increasing
+decay_milestones = [
+    90,
+    180,
+    270,
+]  # list of decay epoch indices for multistep lr. must be increasing
 decay_epochs = 90  # epoch interval to decay LR
 warmup_epochs = 5  # epochs to warmup LR, if scheduler supports
 warmup_prefix = False  # Exclude warmup period from decay schedule.
@@ -320,7 +336,12 @@ dataset_info = {
         "file_name": f"{TRAIN_REPO_PATH}/data/{DPO_DATA}",
         "formatting": "sharegpt",
         "ranking": True,
-        "columns": {"messages": "conversations", "chosen": "chosen", "rejected": "rejected", "images": "images"},
+        "columns": {
+            "messages": "conversations",
+            "chosen": "chosen",
+            "rejected": "rejected",
+            "images": "images",
+        },
     },
 }
 with open(f"{TRAIN_REPO_PATH}/data/dataset_info.json", "w") as f:
@@ -689,7 +710,11 @@ def run_cls():  # noqa: C901
             _logger.info("Using NVIDIA APEX AMP. Training in mixed precision.")
     elif use_amp == "native":
         try:
-            amp_autocast = partial(torch.autocast, device_type=torch.device(config["device"]).type, dtype=amp_dtype)
+            amp_autocast = partial(
+                torch.autocast,
+                device_type=torch.device(config["device"]).type,
+                dtype=amp_dtype,
+            )
         except (AttributeError, TypeError):
             # fallback to CUDA only AMP for PyTorch < 1.10
             assert torch.device(config["device"]).type == "cuda"
@@ -739,7 +764,11 @@ def run_cls():  # noqa: C901
         else:
             if rank == 0:
                 _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[config["device"]], broadcast_buffers=not config["no_ddp_bb"])
+            model = NativeDDP(
+                model,
+                device_ids=[config["device"]],
+                broadcast_buffers=not config["no_ddp_bb"],
+            )
         # NOTE: EMA model does not need to be wrapped by DDP
 
     if config["torchcompile"]:
@@ -1217,7 +1246,10 @@ def train_one_epoch_cls(  # noqa: C901
 
                 if config["save_images"] and output_dir:
                     torchvision.utils.save_image(
-                        input, os.path.join(output_dir, "train-batch-%d.jpg" % batch_idx), padding=0, normalize=True
+                        input,
+                        os.path.join(output_dir, "train-batch-%d.jpg" % batch_idx),
+                        padding=0,
+                        normalize=True,
                     )
 
         if saver is not None and config["recovery_interval"] and ((update_idx + 1) % config["recovery_interval"] == 0):
@@ -1312,7 +1344,10 @@ def validate_cls(
 
 def push_to_hub(local_dir: str, model_name: str):
     model = Qwen2VLForConditionalGeneration.from_pretrained(
-        local_dir, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto"
+        local_dir,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",
+        device_map="auto",
     )
     processor = AutoProcessor.from_pretrained(local_dir)
     model.push_to_hub(HF_USERNAME + "/" + model_name)
@@ -1346,7 +1381,6 @@ def main(cls: bool, sft: bool, dpo: bool):
                 SFT_YAML,
             ]
         )
-        push_to_hub(f"{RUNS_VOL_PATH}/{SFT_MODEL}", SFT_MODEL)
         _exec_subprocess(
             [
                 "llamafactory-cli",
@@ -1378,7 +1412,6 @@ def main(cls: bool, sft: bool, dpo: bool):
                 DPO_YAML,
             ]
         )
-        push_to_hub(f"{RUNS_VOL_PATH}/{DPO_MODEL}", DPO_MODEL)
         _exec_subprocess(
             [
                 "llamafactory-cli",
