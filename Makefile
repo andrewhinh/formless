@@ -6,7 +6,7 @@ setup:
 	uv run pre-commit install
 	modal setup
 	modal config set-environment dev
-	git clone git@github.com:Len-Stevens/Python-Antivirus.git frontend/Python-Antivirus
+	git clone git@github.com:Len-Stevens/Python-Antivirus.git
 	git clone --depth 1 training/https://github.com/hiyouga/LLaMA-Factory.git
 	aws configure
 	echo "alias modal='uv run modal'" >> ~/.bashrc

@@ -37,6 +37,15 @@ VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
     f"/{RUNS_VOLUME}": modal.Volume.from_name(RUNS_VOLUME, create_if_missing=True),
 }
 
+
+if modal.is_local():
+    DB_VOL_PATH = str(PARENT_PATH / "local_db")
+    if not os.path.exists(DB_VOL_PATH):
+        os.mkdir(DB_VOL_PATH)
+        os.chmod(DB_VOL_PATH, 0o777)  # noqa: S103
+else:
+    DB_VOL_PATH = f"/{DB_VOLUME}"
+
 CPU = 20  # cores (Modal max)
 MINUTES = 60  # seconds
 
@@ -46,15 +55,15 @@ GPU_IMAGE = (
     )
     .apt_install("git")  # add system dependencies
     .pip_install(  # add Python dependencies
-        "vllm==0.6.5",
-        "hf_transfer==0.1.8",
+        "vllm==0.7.1",
+        "huggingface_hub[hf_transfer]==0.29.1",
         "ninja==1.11.1",  # required to build flash-attn
         "packaging==23.1",  # required to build flash-attn
-        "wheel==0.41.2",  # required to build flash-attn
+        "wheel==0.45.1",  # required to build flash-attn
         "torch==2.5.1",  # required to build flash-attn,
     )
     .run_commands(  # add flash-attn
-        "pip install flash-attn==2.7.2.post1 --no-build-isolation"
+        "pip install flash-attn==2.7.4.post1 --no-build-isolation"
     )
     .env(
         {

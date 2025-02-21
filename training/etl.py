@@ -343,7 +343,7 @@ IMAGE = (
         "pydantic==2.10.4",
         "tqdm==4.67.1",
         "datasketch==1.6.5",
-        "ImageHash==4.3.1",
+        "ImageHash==4.3.2",
         "pyspark==3.5.4",
     )
     .run_function(

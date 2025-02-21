@@ -306,7 +306,7 @@ IMAGE = (
             "cd /LLaMA-Factory && pip install -e '.[torch,metrics]'",
         ]
     )
-    .pip_install("deepspeed==0.15.4", "timm==1.0.14")
+    .pip_install("deepspeed==0.16.3", "timm==1.0.14")
     .env(
         {
             "FORCE_TORCHRUN": "1",

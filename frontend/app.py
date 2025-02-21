@@ -1,5 +1,7 @@
+import base64
 import csv
 import io
+import json
 import os
 import secrets
 import subprocess
@@ -35,7 +37,7 @@ from db.models import (
 )
 from utils import (
     APP_NAME,
-    DB_VOLUME,
+    DB_VOL_PATH,
     IN_PROD,
     MINUTES,
     PARENT_PATH,
@@ -47,11 +49,6 @@ from utils import (
 # -----------------------------------------------------------------------------
 
 FE_PATH = PARENT_PATH / "frontend"
-DB_VOL_PATH = str(PARENT_PATH / "local_db") if modal.is_local() else f"/{DB_VOLUME}"
-if modal.is_local():
-    if not os.path.exists(DB_VOL_PATH):
-        os.mkdir(DB_VOL_PATH)
-        os.chmod(DB_VOL_PATH, 0o777)  # noqa: S103
 
 
 def get_app():  # noqa: C901
@@ -128,10 +125,7 @@ def get_app():  # noqa: C901
     upload_dir = Path(f"{DB_VOL_PATH}/uploads")
     upload_dir.mkdir(exist_ok=True)
 
-    engine = create_engine(
-        url=os.getenv("POSTGRES_URL"),
-        echo=not IN_PROD,
-    )
+    engine = create_engine(url=os.getenv("POSTGRES_URL"), echo=False)
 
     @contextmanager
     def get_db_session():
@@ -197,8 +191,11 @@ def get_app():  # noqa: C901
     max_gens = 10
     max_keys = 20
 
-    # ui
+    ## ui
     limit_chars = 100
+
+    ## api/db timeout
+    api_timeout = 5 * MINUTES
 
     ## components
     def gen_view(
@@ -206,8 +203,6 @@ def get_app():  # noqa: C901
         session,
     ):
         ### check if g is valid
-        if not modal.is_local():
-            VOLUME_CONFIG[f"{DB_VOL_PATH}"].reload()
         with get_db_session() as db_session:
             if db_session.get(Gen, g.id) is None:
                 fh.add_toast(session, "Please refresh the page", "error")
@@ -220,10 +215,10 @@ def get_app():  # noqa: C901
         if g.image_url and validate_image_url(g.image_url):
             image_src = g.image_url
         elif g.image_file and isinstance(validate_image_file(image_file=None, upload_path=Path(g.image_file)), Path):
-            temp_path = FE_PATH / Path(g.image_file).name
-            with open(temp_path, "wb") as f:
-                f.write(open(g.image_file, "rb").read())
-            image_src = f"/{Path(g.image_file).name}"
+            with open(g.image_file, "rb") as f:
+                image_data = f.read()
+            b64_image = base64.b64encode(image_data).decode("utf-8")
+            image_src = f"data:image/{Path(g.image_file).suffix[1:]};base64,{b64_image}"
 
         if g.failed:
             return fh.Card(
@@ -238,20 +233,18 @@ def get_app():  # noqa: C901
                         hx_post="/show-select-gen-delete",
                         hx_indicator="#spinner",
                     ),
-                    fh.Button(
-                        fh.Svg(
-                            fh.NotStr(
-                                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
-                            ),
-                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden",
+                    fh.Svg(
+                        fh.NotStr(
+                            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                         ),
                         hx_delete=f"/gen/{g.id}",
                         hx_indicator="#spinner",
-                        hx_target="closest card",
+                        hx_target=f"#gen-{g.id}",
                         hx_swap="outerHTML swap:.25s",
                         hx_confirm="Are you sure?",
+                        cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden border-red-300 border-2 hover:border-red-100",
                     ),
-                    cls="w-1/2 flex justify-start items-center gap-2",
+                    cls="w-1/6 flex justify-start items-center gap-2",
                 ),
                 fh.Div(
                     fh.Img(
@@ -259,20 +252,17 @@ def get_app():  # noqa: C901
                         alt="Card image",
                         cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                     ),
-                    cls="w-3/6 flex justify-center items-center",
+                    cls="w-2/6 flex justify-center items-center",
                 ),
                 fh.Div(
                     fh.Div(
                         fh.P(
                             "Generation failed",
                             cls="text-red-300",
-                            hx_ext="sse",
-                            sse_connect=f"/stream-gens/{g.id}",
-                            sse_swap="UpdateGens",
                         ),
                         cls="flex flex-col justify-center items-center gap-2",
                     ),
-                    cls="w-2/6",
+                    cls="w-3/6",
                 ),
                 cls="w-full flex justify-between items-center p-4",
                 id=f"gen-{g.id}",
@@ -290,18 +280,16 @@ def get_app():  # noqa: C901
                         hx_post="/show-select-gen-delete",
                         hx_indicator="#spinner",
                     ),
-                    fh.Button(
-                        fh.Svg(
-                            fh.NotStr(
-                                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
-                            ),
-                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden",
+                    fh.Svg(
+                        fh.NotStr(
+                            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                         ),
                         hx_delete=f"/gen/{g.id}",
                         hx_indicator="#spinner",
-                        hx_target="closest card",
+                        hx_target=f"#gen-{g.id}",
                         hx_swap="outerHTML swap:.25s",
                         hx_confirm="Are you sure?",
+                        cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden border-red-300 border-2 hover:border-red-100",
                     ),
                     cls="w-1/6 flex justify-start items-center gap-2",
                 ),
@@ -311,26 +299,23 @@ def get_app():  # noqa: C901
                         alt="Card image",
                         cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                     ),
-                    cls="w-3/6 flex justify-center items-center",
+                    cls="w-2/6 flex justify-center items-center",
                 ),
                 fh.Div(
                     fh.Div(
                         fh.P(
                             g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
-                            onclick=f"navigator.clipboard.writeText('{g.response.replace(chr(92), chr(92)*2)}');",  # since latex includes backslashes
+                            onclick=f"navigator.clipboard.writeText('{json.dumps(g.response)[1:-1]}');",
                             hx_post="/toast?message=Copied to clipboard!&type=success",
                             hx_indicator="#spinner",
                             hx_target="#toast-container",
                             hx_swap="outerHTML",
                             cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
                             title="Click to copy",
-                            hx_ext="sse",
-                            sse_connect=f"/stream-gens/{g.id}",
-                            sse_swap="UpdateGens",
                         ),
                         cls="flex flex-col justify-center items-center gap-2",
                     ),
-                    cls="w-2/6",
+                    cls="w-3/6",
                 ),
                 cls="w-full flex justify-between items-center p-4",
                 id=f"gen-{g.id}",
@@ -347,18 +332,16 @@ def get_app():  # noqa: C901
                     hx_post="/show-select-gen-delete",
                     hx_indicator="#spinner",
                 ),
-                fh.Button(
-                    fh.Svg(
-                        fh.NotStr(
-                            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
-                        ),
-                        cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden",
+                fh.Svg(
+                    fh.NotStr(
+                        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                     ),
                     hx_delete=f"/gen/{g.id}",
                     hx_indicator="#spinner",
-                    hx_target="closest card",
+                    hx_target=f"#gen-{g.id}",
                     hx_swap="outerHTML swap:.25s",
                     hx_confirm="Are you sure?",
+                    cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer md:block hidden border-red-300 border-2 hover:border-red-100",
                 ),
                 cls="w-1/6 flex justify-start items-center gap-2",
             ),
@@ -368,7 +351,7 @@ def get_app():  # noqa: C901
                     alt="Card image",
                     cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                 ),
-                cls="w-3/6 flex justify-center items-center",
+                cls="w-2/6 flex justify-center items-center",
             ),
             fh.Div(
                 fh.Div(
@@ -380,7 +363,7 @@ def get_app():  # noqa: C901
                     ),
                     cls="flex flex-col justify-center items-center gap-2",
                 ),
-                cls="w-2/6",
+                cls="w-3/6",
             ),
             cls="w-full flex justify-between items-center p-4",
             id=f"gen-{g.id}",
@@ -418,18 +401,16 @@ def get_app():  # noqa: C901
                             hx_post="/show-select-key-delete",
                             hx_indicator="#spinner",
                         ),
-                        fh.Button(
-                            fh.Svg(
-                                fh.NotStr(
-                                    """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
-                                ),
-                                cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer hidden md:block",
+                        fh.Svg(
+                            fh.NotStr(
+                                """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" /></svg>"""
                             ),
                             hx_delete=f"/key/{k.id}",
                             hx_indicator="#spinner",
                             hx_target="closest tr",
                             hx_swap="outerHTML swap:.25s",
                             hx_confirm="Are you sure?",
+                            cls="w-8 h-8 text-red-300 hover:text-red-100 cursor-pointer hidden md:block border-red-300 border-2 hover:border-red-100",
                         ),
                         cls="w-1/6 flex justify-start items-center gap-2",
                     ),
@@ -866,7 +847,7 @@ def get_app():  # noqa: C901
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                cwd="/Python-Antivirus",
+                cwd=PARENT_PATH / "Python-Antivirus",
             )
             scan_result = result.stdout.strip().lower()
             if scan_result == "infected":
@@ -887,42 +868,31 @@ def get_app():  # noqa: C901
         k = ApiKeyCreate(session_id=session["session_id"])
         k = generate_key_and_save(k)
 
-        # TODO: uncomment for debugging
-        # g.response = "temp"
-        # with get_db_session() as db_session:
-        #     db_session.add(g)
-        #     db_session.commit()
-        #     db_session.refresh(g)
-        #     return
-
-        # TODO: uncomment for debugging
-        # g.failed = True
-        # with get_db_session() as db_session:
-        #     db_session.add(g)
-        #     db_session.commit()
-        #     db_session.refresh(g)
-        #     return
-
-        if g.image_url:
-            response = requests.post(
-                os.getenv("API_URL"),
-                json={"image_url": g.image_url},
-                headers={"X-API-Key": k.key},
-            )
-        elif g.image_file:
-            response = requests.post(
-                f"{os.getenv('API_URL')}/upload",
-                files={"image": open(g.image_file, "rb")},
-                headers={
-                    "X-API-Key": k.key,
-                },
-            )
-
-        if not response.ok:
-            fh.add_toast(session, "Failed with status code: " + str(response.status_code), "error")
-            g.failed = True
-        else:
+        try:
+            if g.image_url:
+                response = requests.post(
+                    os.getenv("API_URL"),
+                    json={"image_url": g.image_url},
+                    headers={"X-API-Key": k.key},
+                    timeout=api_timeout,
+                )
+            elif g.image_file:
+                response = requests.post(
+                    f"{os.getenv('API_URL')}/upload",
+                    files={"image": open(g.image_file, "rb")},
+                    headers={
+                        "X-API-Key": k.key,
+                    },
+                    timeout=api_timeout,
+                )
+            if not response.ok:
+                os.remove(g.image_file)
+                raise Exception(f"Failed with status code: {response.status_code}")
             g.response = response.json()
+        except Exception as e:
+            fh.add_toast(session, "Failed with error: " + str(e), "error")
+            g.failed = True
+
         with get_db_session() as db_session:
             db_session.add(g)
             db_session.commit()
@@ -945,26 +915,27 @@ def get_app():  # noqa: C901
         id: int,
     ):
         while not shutdown_event.is_set():
-            curr_gen = get_curr_gens(session["session_id"], ids=[id])[0]
-            curr_state = "response" if curr_gen.response else "failed" if curr_gen.failed else "loading"
-            global shown_generations
-            if shown_generations.get(id) != curr_state:
-                shown_generations[id] = curr_state
-                yield f"""event: UpdateGens\ndata: {fh.to_xml(
+            curr_gen = get_curr_gens(session["session_id"], ids=[id])
+            if curr_gen:
+                curr_gen = curr_gen[0]
+                curr_state = "response" if curr_gen.response else "failed" if curr_gen.failed else "loading"
+                global shown_generations
+                if shown_generations.get(id) != curr_state:
+                    shown_generations[id] = curr_state
+                    yield f"""event: UpdateGens\ndata: {fh.to_xml(
                     fh.P(
                         "Scanning image ...",
                         sse_swap="UpdateGens",
                     ) if curr_state == "loading" else
                     fh.P(
                         curr_gen.response[:limit_chars] + ("..." if len(curr_gen.response) > limit_chars else ""),
-                        onclick=f"navigator.clipboard.writeText('{curr_gen.response.replace(chr(92), chr(92)*2)}');",
+                        onclick=f"navigator.clipboard.writeText('{json.dumps(curr_gen.response)[1:-1]}');",
                         hx_post="/toast?message=Copied to clipboard!&type=success",
                         hx_indicator="#spinner",
                         hx_target="#toast-container",
                         hx_swap="outerHTML",
                         cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
                         title="Click to copy",
-                        sse_swap="UpdateGens",
                     ) if curr_state == "response" else
                     fh.P(
                         "Generation failed",
@@ -1637,21 +1608,23 @@ f_app = get_app()
 IMAGE = (
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
     .apt_install("git")
-    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
+    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git /root/Python-Antivirus"])
     .apt_install("libpq-dev")  # for psycopg2
     .pip_install(  # add Python dependencies
-        "python-fasthtml==0.6.10",
+        "python-fasthtml==0.12.1",
         "sqlite-minutils==4.0.3",  # needed for fasthtml
         "simpleicons==7.21.0",
         "requests==2.32.3",
-        "stripe==11.1.0",
+        "stripe==11.5.0",
         "validators==0.34.0",
-        "pillow==11.0.0",
+        "pillow==10.4.0",
         "sqlmodel==0.0.22",
         "psycopg2==2.9.10",
+        "huggingface_hub[hf_transfer]==0.29.1",
     )
-    .copy_local_file(FE_PATH / "favicon.ico", "/root/favicon.ico")
-    .copy_local_dir(PARENT_PATH / "db", "/root/db")
+    .add_local_file(FE_PATH / "favicon.ico", "/root/favicon.ico")
+    .add_local_dir(PARENT_PATH / "db", "/root/db")
+    .add_local_python_source("db", "utils")
 )
 
 FE_TIMEOUT = 5 * MINUTES  # max

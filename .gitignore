@@ -208,6 +208,7 @@ Python-Antivirus
 # DB
 *.db
 **/versions/
+**/local_db/
 
 # Training
 **/artifacts/

@@ -26,7 +26,7 @@ from vllm import LLM, SamplingParams
 from db.models import ApiKey, ApiKeyCreate
 from utils import (
     APP_NAME,
-    DB_VOLUME,
+    DB_VOL_PATH,
     DEFAULT_IMG_PATH,
     DEFAULT_IMG_URL,
     DEFAULT_QUESTION,
@@ -87,14 +87,8 @@ def download_model():
 
 if modal.is_local():
     GPU_COUNT = torch.cuda.device_count()
-    DB_VOL_PATH = str(PARENT_PATH / "local_db")
-    if not os.path.exists(DB_VOL_PATH):
-        os.mkdir(DB_VOL_PATH)
-        os.chmod(DB_VOL_PATH, 0o777)  # noqa: S103
-    download_model()
 else:
     GPU_COUNT = 1
-    DB_VOL_PATH = f"/{DB_VOLUME}"
 
 
 def get_app():  # noqa: C901
@@ -263,7 +257,7 @@ def get_app():  # noqa: C901
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                cwd="/Python-Antivirus",
+                cwd=PARENT_PATH / "Python-Antivirus",
             )
             scan_result = result.stdout.strip().lower()
             if scan_result == "infected":
@@ -333,13 +327,14 @@ IMAGE = (
         "sqlmodel==0.0.22",
         "psycopg2-binary==2.9.10",
     )
-    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git"])
+    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git /root/Python-Antivirus"])
     .run_function(
         download_model,
         secrets=SECRETS,
         volumes=VOLUME_CONFIG,
     )
-    .copy_local_dir(PARENT_PATH / "db", "/root/db")
+    .add_local_dir(PARENT_PATH / "db", "/root/db")
+    .add_local_python_source("db", "utils")
 )
 API_TIMEOUT = 5 * MINUTES
 API_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
@@ -394,6 +389,7 @@ def main():
 
 
 if __name__ == "__main__":
+    download_model()
     uvicorn.run(get_app(), reload=True)
 
 # TODO
