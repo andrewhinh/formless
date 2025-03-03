@@ -17,6 +17,7 @@ DEFAULT_QUESTION = "What is the content of this image?"
 HF_USERNAME = HfApi().whoami(token=os.getenv("HF_TOKEN"))["name"]
 
 # Modal
+REGION = "us-west"  # for etl and training when reading files from S3
 IN_PROD = os.getenv("MODAL_ENVIRONMENT", "dev") == "main"
 SECRETS = [modal.Secret.from_dotenv(path=PARENT_PATH, filename=".env" if IN_PROD else ".env.dev")]
 

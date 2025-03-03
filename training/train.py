@@ -65,6 +65,7 @@ from utils import (
     GPU_IMAGE,
     IN_PROD,
     MINUTES,
+    REGION,
     RUNS_VOLUME,
     SECRETS,
     VOLUME_CONFIG,
@@ -1424,6 +1425,7 @@ def main(cls: bool, sft: bool, dpo: bool):
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,

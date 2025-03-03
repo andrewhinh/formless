@@ -52,6 +52,7 @@ from utils import (
     IN_PROD,
     MINUTES,
     PARENT_PATH,
+    REGION,
     SECRETS,
     VOLUME_CONFIG,
 )
@@ -452,6 +453,7 @@ def render_ink(
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -547,6 +549,7 @@ def run_model(
 @app.function(
     image=IMAGE,
     gpu=GPU_CONFIG,
+    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -573,6 +576,7 @@ def analyze_inks(img_paths: list[Path]) -> list[int]:
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -621,6 +625,7 @@ def compute_minhash(phash_str):
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -722,6 +727,7 @@ def write_sft_json(json_path: Path, img_paths: list, labels: list):
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
@@ -1062,6 +1068,7 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,

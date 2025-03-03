@@ -22,6 +22,7 @@ from utils import (
     HF_USERNAME,
     MINUTES,
     PARENT_PATH,
+    REGION,
     RUNS_VOLUME,
     SECRETS,
     VOLUME_CONFIG,
@@ -243,6 +244,7 @@ def main(sft: bool, dpo: bool):
 @app.function(
     image=IMAGE,
     gpu=GPU_CONFIG,
+    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,

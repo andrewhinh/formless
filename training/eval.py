@@ -22,6 +22,7 @@ from utils import (
     HF_USERNAME,
     MINUTES,
     PARENT_PATH,
+    REGION,
     SECRETS,
     VOLUME_CONFIG,
 )
@@ -204,6 +205,7 @@ def compute_cer(gt: list[str], output: list[str]) -> float:
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
@@ -310,6 +312,7 @@ def main(base: bool, sft: bool, dpo: bool, quant: bool):
 
 @app.function(
     image=IMAGE,
+    region=REGION,
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
