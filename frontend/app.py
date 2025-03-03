@@ -252,17 +252,11 @@ def get_app():  # noqa: C901
                         alt="Card image",
                         cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                     ),
-                    cls="w-2/6 flex justify-center items-center",
-                ),
-                fh.Div(
-                    fh.Div(
-                        fh.P(
-                            "Generation failed",
-                            cls="text-red-300",
-                        ),
-                        cls="flex flex-col justify-center items-center gap-2",
+                    fh.P(
+                        "Generation failed",
+                        cls="text-red-300",
                     ),
-                    cls="w-3/6",
+                    cls="w-5/6 flex justify-evenly flex-col md:flex-row items-center gap-4",
                 ),
                 cls="w-full flex justify-between items-center p-4",
                 id=f"gen-{g.id}",
@@ -299,23 +293,17 @@ def get_app():  # noqa: C901
                         alt="Card image",
                         cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                     ),
-                    cls="w-2/6 flex justify-center items-center",
-                ),
-                fh.Div(
-                    fh.Div(
-                        fh.P(
-                            g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
-                            onclick=f"navigator.clipboard.writeText('{json.dumps(g.response)[1:-1]}');",
-                            hx_post="/toast?message=Copied to clipboard!&type=success",
-                            hx_indicator="#spinner",
-                            hx_target="#toast-container",
-                            hx_swap="outerHTML",
-                            cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
-                            title="Click to copy",
-                        ),
-                        cls="flex flex-col justify-center items-center gap-2",
+                    fh.P(
+                        g.response[:limit_chars] + ("..." if len(g.response) > limit_chars else ""),
+                        onclick=f"navigator.clipboard.writeText('{json.dumps(g.response)[1:-1]}');",
+                        hx_post="/toast?message=Copied to clipboard!&type=success",
+                        hx_indicator="#spinner",
+                        hx_target="#toast-container",
+                        hx_swap="outerHTML",
+                        cls="text-blue-300 hover:text-blue-100 cursor-pointer max-w-full",
+                        title="Click to copy",
                     ),
-                    cls="w-3/6",
+                    cls="w-5/6 flex justify-evenly flex-col md:flex-row items-center gap-4",
                 ),
                 cls="w-full flex justify-between items-center p-4",
                 id=f"gen-{g.id}",
@@ -351,19 +339,13 @@ def get_app():  # noqa: C901
                     alt="Card image",
                     cls="max-h-24 max-w-24 md:max-h-60 md:max-w-60 object-contain",
                 ),
-                cls="w-2/6 flex justify-center items-center",
-            ),
-            fh.Div(
-                fh.Div(
-                    fh.P(
-                        "Scanning image ...",
-                        hx_ext="sse",
-                        sse_connect=f"/stream-gens/{g.id}",
-                        sse_swap="UpdateGens",
-                    ),
-                    cls="flex flex-col justify-center items-center gap-2",
+                fh.P(
+                    "Scanning image ...",
+                    hx_ext="sse",
+                    sse_connect=f"/stream-gens/{g.id}",
+                    sse_swap="UpdateGens",
                 ),
-                cls="w-3/6",
+                cls="w-5/6 flex justify-evenly flex-col md:flex-row items-center gap-4",
             ),
             cls="w-full flex justify-between items-center p-4",
             id=f"gen-{g.id}",
@@ -485,7 +467,8 @@ def get_app():  # noqa: C901
             cls="w-full flex flex-col md:flex-row gap-2 md:gap-4",
         )
 
-    def num_gens(gen_count, hx_swap_oob: bool = "false"):
+    def num_gens(session, hx_swap_oob: bool = "false"):
+        gen_count = len(get_curr_gens(session["session_id"]))
         return fh.Div(
             fh.P(
                 f"({gen_count} total generations)",
@@ -496,7 +479,8 @@ def get_app():  # noqa: C901
             cls="w-auto h-full flex justify-center items-center",
         )
 
-    def num_keys(key_count, hx_swap_oob: bool = "false"):
+    def num_keys(session, hx_swap_oob: bool = "false"):
+        key_count = len(get_curr_keys(session["session_id"]))
         return fh.Div(
             fh.P(
                 f"({key_count} total keys)",
@@ -507,7 +491,8 @@ def get_app():  # noqa: C901
             cls="w-auto h-full flex justify-center items-center",
         )
 
-    def gen_manage(gens_present: bool, gens_selected: bool = False, hx_swap_oob: bool = "false"):
+    def gen_manage(session, gens_selected: bool = False, hx_swap_oob: bool = "false"):
+        gens_present = len(get_curr_gens(session["session_id"])) > 0
         return fh.Div(
             fh.Button(
                 "Delete selected",
@@ -546,7 +531,8 @@ def get_app():  # noqa: C901
             cls="flex flex-col md:flex-row justify-center items-center gap-4 w-full",
         )
 
-    def key_manage(keys_present: bool, keys_selected: bool = False, hx_swap_oob: bool = "false"):
+    def key_manage(session, keys_selected: bool = False, hx_swap_oob: bool = "false"):
+        keys_present = len(get_curr_keys(session["session_id"])) > 0
         return fh.Div(
             fh.Button(
                 "Delete selected",
@@ -585,7 +571,11 @@ def get_app():  # noqa: C901
             cls="flex flex-col md:flex-row justify-center items-center gap-4 w-full",
         )
 
-    def gen_load_more(gens_present: bool, still_more: bool, idx: int = 2, hx_swap_oob: bool = "false"):
+    def gen_load_more(session, idx: int = 2, hx_swap_oob: bool = "false"):
+        n_gens = len(get_curr_gens(session["session_id"]))
+        gens_present = n_gens > 0
+        global shown_generations
+        still_more = n_gens > len(shown_generations)
         return fh.Div(
             fh.Button(
                 "Load More",
@@ -602,7 +592,11 @@ def get_app():  # noqa: C901
             cls="w-full md:w-2/3",
         )
 
-    def key_load_more(keys_present: bool, still_more: bool, idx: int = 2, hx_swap_oob: bool = "false"):
+    def key_load_more(session, idx: int = 2, hx_swap_oob: bool = "false"):
+        n_keys = len(get_curr_keys(session["session_id"]))
+        keys_present = n_keys > 0
+        global shown_keys
+        still_more = n_keys > len(shown_keys)
         return fh.Div(
             fh.Button(
                 "Load More",
@@ -702,7 +696,6 @@ def get_app():  # noqa: C901
         session,
     ):
         curr_gen_form = session["gen_form"]
-        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return fh.Main(
             fh.Div(
                 gen_form_toggle(curr_gen_form),
@@ -716,9 +709,9 @@ def get_app():  # noqa: C901
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center items-center",
             ),
-            num_gens(len(get_curr_gens(session["session_id"]))),
+            num_gens(session),
             fh.Form(
-                gen_manage(gens_present),
+                gen_manage(session),
                 fh.Div(
                     get_gen_table_part(session),
                     id="gen-list",
@@ -727,7 +720,7 @@ def get_app():  # noqa: C901
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
             gen_load_more(
-                gens_present, len(get_curr_gens(session["session_id"], number=max_gens, offset=max_gens)) > 0
+                session,
             ),
             cls="flex flex-col justify-start items-center grow gap-4 p-8",
         )
@@ -735,7 +728,6 @@ def get_app():  # noqa: C901
     def developer_page(
         session,
     ):
-        keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return fh.Main(
             fh.Button(
                 "Request New Key",
@@ -746,9 +738,9 @@ def get_app():  # noqa: C901
                 hx_swap="afterbegin",
                 cls="text-blue-300 hover:text-blue-100 p-2 w-full md:w-2/3 border-blue-300 border-2 hover:border-blue-100",
             ),
-            num_keys(len(get_curr_keys(session["session_id"]))),
+            num_keys(session),
             fh.Form(
-                key_manage(keys_present),
+                key_manage(session),
                 fh.Table(
                     fh.Thead(
                         fh.Tr(
@@ -769,7 +761,7 @@ def get_app():  # noqa: C901
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
             key_load_more(
-                keys_present, len(get_curr_keys(session["session_id"], number=max_keys, offset=max_keys)) > 0
+                session,
             ),
             cls="flex flex-col justify-start items-center grow gap-4 p-8",
         )
@@ -782,7 +774,11 @@ def get_app():  # noqa: C901
             fh.Div(
                 balance_view(),
                 fh.P(
-                    fh.A("Buy 50 more", href="/buy_global", cls="font-bold text-blue-300 hover:text-blue-100"),
+                    fh.A(
+                        "Buy 50 more",
+                        href="/buy_global",
+                        cls="font-bold text-blue-300 hover:text-blue-100",
+                    ),
                     " to share ($1)",
                 ),
                 cls="flex flex-col gap-0.5",
@@ -791,7 +787,7 @@ def get_app():  # noqa: C901
                 fh.P("Made by"),
                 fh.A(
                     "Andrew Hinh",
-                    href="https://andrewhinh.github.io/",
+                    href="https://ajhinh.com/",
                     cls="font-bold text-blue-300 hover:text-blue-100",
                 ),
                 cls="flex flex-col text-right gap-0.5",
@@ -940,7 +936,6 @@ def get_app():  # noqa: C901
                     fh.P(
                         "Generation failed",
                         cls="text-red-300",
-                        sse_swap="UpdateGens",
                     ))}\n\n"""
             await sleep(1)
 
@@ -956,12 +951,17 @@ def get_app():  # noqa: C901
     ## pagination
     def get_gen_table_part(session, part_num: int = 1, size: int = max_gens):
         curr_gens = get_curr_gens(session["session_id"], number=size, offset=(part_num - 1) * size)
+        global shown_generations
+        for g in curr_gens:
+            shown_generations[g.id] = "response" if g.response else "failed" if g.failed else "loading"
         read_gens = [GenRead.model_validate(g) for g in curr_gens]
         paginated = [gen_view(g, session) for g in read_gens]
         return tuple(paginated)
 
     def get_key_table_part(session, part_num: int = 1, size: int = max_keys):
         curr_keys = get_curr_keys(session["session_id"], number=size, offset=(part_num - 1) * size)
+        global shown_keys
+        shown_keys = set(shown_keys) | {k.id for k in curr_keys}
         read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
         paginated = [key_view(k, session) for k in read_keys]
         return tuple(paginated)
@@ -1131,18 +1131,18 @@ def get_app():  # noqa: C901
     ## pagination
     @f_app.get("/page-gens")
     def page_gens(session, idx: int):
-        return get_gen_table_part(session, idx), gen_load_more(
-            bool(get_curr_gens(session["session_id"], number=1)),
-            len(get_curr_gens(session["session_id"], number=max_gens, offset=max_gens * (idx + 1))) > 0,
+        part = get_gen_table_part(session, idx)  # to modify global shown_generations
+        return part, gen_load_more(
+            session,
             idx + 1,
             "true",
         )
 
     @f_app.get("/page-keys")
     def page_keys(session, idx: int):
-        return get_key_table_part(session, idx), key_load_more(
-            bool(get_curr_keys(session["session_id"], number=1)),
-            len(get_curr_keys(session["session_id"], number=max_keys, offset=max_keys * (idx + 1))) > 0,
+        part = get_key_table_part(session, idx)  # to modify global shown_keys
+        return part, key_load_more(
+            session,
             idx + 1,
             "true",
         )
@@ -1176,7 +1176,10 @@ def get_app():  # noqa: C901
 
         # Clear input
         clear_img_input = fh.Input(
-            id="new-image-url", name="image_url", placeholder="Enter an image url", hx_swap_oob="true"
+            id="new-image-url",
+            name="image_url",
+            placeholder="Enter an image url",
+            hx_swap_oob="true",
         )
 
         # Generate as before
@@ -1194,15 +1197,13 @@ def get_app():  # noqa: C901
         shown_generations[g.id] = "loading"
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
-        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return (
             gen_view(g_read, session),
             clear_img_input,
-            num_gens(len(get_curr_gens(session["session_id"])), "true"),
-            gen_manage(gens_present, False, "true"),
+            num_gens(session, "true"),
+            gen_manage(session, False, "true"),
             gen_load_more(
-                gens_present,
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1234,7 +1235,11 @@ def get_app():  # noqa: C901
 
         # Clear input
         clear_img_input = fh.Input(
-            id="new-image-upload", name="image_file", type="file", accept="image/*", hx_swap_oob="true"
+            id="new-image-upload",
+            name="image_file",
+            type="file",
+            accept="image/*",
+            hx_swap_oob="true",
         )
 
         # Generate as before
@@ -1252,15 +1257,13 @@ def get_app():  # noqa: C901
         shown_generations[g.id] = "loading"
         generate_and_save(g, session)
         g_read = GenRead.model_validate(g)
-        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return (
             gen_view(g_read, session),
             clear_img_input,
-            num_gens(len(get_curr_gens(session["session_id"])), "true"),
-            gen_manage(gens_present, False, "true"),
+            num_gens(session, "true"),
+            gen_manage(session, False, "true"),
             gen_load_more(
-                gens_present,
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1275,18 +1278,16 @@ def get_app():  # noqa: C901
         k_read = ApiKeyRead.model_validate(k)
         global shown_keys
         shown_keys.append(k.id)
-        keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return (
             key_view(k_read, session),
-            num_keys(len(get_curr_keys(session["session_id"])), "true"),
+            num_keys(session, "true"),
             key_manage(
-                keys_present,
+                session,
                 False,
                 "true",
             ),
             key_load_more(
-                keys_present,
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1310,15 +1311,14 @@ def get_app():  # noqa: C901
         fh.add_toast(session, "Deleted generations.", "success")
         return (
             "",
-            num_gens(len(get_curr_gens(session["session_id"])), "true"),
+            num_gens(session, "true"),
             gen_manage(
-                bool(get_curr_gens(session["session_id"], number=1)),
+                session,
                 False,
                 "true",
             ),
             gen_load_more(
-                bool(get_curr_gens(session["session_id"], number=1)),
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1335,15 +1335,14 @@ def get_app():  # noqa: C901
         fh.add_toast(session, "Deleted keys.", "success")
         return (
             "",
-            num_keys(len(get_curr_keys(session["session_id"])), "true"),
+            num_keys(session, "true"),
             key_manage(
-                bool(get_curr_keys(session["session_id"], number=1)),
+                session,
                 False,
                 "true",
             ),
             key_load_more(
-                bool(get_curr_keys(session["session_id"], number=1)),
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1363,20 +1362,18 @@ def get_app():  # noqa: C901
                         VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
                     shown_generations.pop(g.id, None)
             fh.add_toast(session, "Deleted generations.", "success")
-            gens_present = bool(get_curr_gens(session["session_id"], number=1))
             remain_gens = get_curr_gens(session["session_id"], ids=list(shown_generations.keys()))
             remain_view = [gen_view(GenRead.model_validate(g), session) for g in remain_gens[::-1]]
             return (
                 remain_view,
-                num_gens(len(get_curr_gens(session["session_id"])), "true"),
+                num_gens(session, "true"),
                 gen_manage(
-                    gens_present,
+                    session,
                     False,
                     "true",
                 ),
                 gen_load_more(
-                    gens_present,
-                    False,
+                    session,
                     hx_swap_oob="true",
                 ),
             )
@@ -1395,20 +1392,18 @@ def get_app():  # noqa: C901
                     db_session.commit()
                     shown_keys = [key for key in shown_keys if key != k.id]
             fh.add_toast(session, "Deleted keys.", "success")
-            keys_present = bool(get_curr_keys(session["session_id"], number=1))
             remain_keys = get_curr_keys(session["session_id"], ids=list(shown_keys))
             remain_view = [key_view(ApiKeyRead.model_validate(k), session) for k in remain_keys[::-1]]
             return (
                 remain_view,
-                num_keys(len(get_curr_keys(session["session_id"])), "true"),
+                num_keys(session, "true"),
                 key_manage(
-                    keys_present,
+                    session,
                     False,
                     "true",
                 ),
                 key_load_more(
-                    keys_present,
-                    False,
+                    session,
                     hx_swap_oob="true",
                 ),
             )
@@ -1418,11 +1413,17 @@ def get_app():  # noqa: C901
 
     @f_app.post("/show-select-gen-delete")
     def show_select_gen_delete(session, selected_gens: list[int] = None):
-        return gen_manage(bool(get_curr_gens(session["session_id"], number=1)), selected_gens is not None)
+        return gen_manage(
+            session,
+            len(selected_gens) > 0,
+        )
 
     @f_app.post("/show-select-key-delete")
     def show_select_key_delete(session, selected_keys: list[int] = None):
-        return key_manage(bool(get_curr_keys(session["session_id"], number=1)), selected_keys is not None)
+        return key_manage(
+            session,
+            len(selected_keys) > 0,
+        )
 
     @f_app.delete("/gen/{gen_id}")
     def delete_gen(
@@ -1440,18 +1441,16 @@ def get_app():  # noqa: C901
         global shown_generations
         shown_generations.pop(gen_id, None)
         fh.add_toast(session, "Deleted generation.", "success")
-        gens_present = bool(get_curr_gens(session["session_id"], number=1))
         return (
             "",
-            num_gens(len(get_curr_gens(session["session_id"])), "true"),
+            num_gens(session, "true"),
             gen_manage(
-                gens_present,
+                session,
                 False,
                 "true",
             ),
             gen_load_more(
-                gens_present,
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1468,18 +1467,16 @@ def get_app():  # noqa: C901
         global shown_keys
         shown_keys = [key for key in shown_keys if key != key_id]
         fh.add_toast(session, "Deleted key.", "success")
-        keys_present = bool(get_curr_keys(session["session_id"], number=1))
         return (
             "",
-            num_keys(len(get_curr_keys(session["session_id"])), "true"),
+            num_keys(session, "true"),
             key_manage(
-                keys_present,
+                session,
                 False,
                 "true",
             ),
             key_load_more(
-                keys_present,
-                False,
+                session,
                 hx_swap_oob="true",
             ),
         )
@@ -1498,11 +1495,21 @@ def get_app():  # noqa: C901
         writer = csv.writer(output)
         writer.writerow(["request_at", "image_url", "image_file", "response", "failed"])
         for g in curr_gens:
-            writer.writerow([g.request_at, g.image_url, Path(g.image_file).name, g.response, g.failed])
+            writer.writerow(
+                [
+                    g.request_at,
+                    g.image_url,
+                    Path(g.image_file).name,
+                    g.response,
+                    g.failed,
+                ]
+            )
 
         output.seek(0)
         response = fh.Response(
-            output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=gens.csv"}
+            output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=gens.csv"},
         )
         return response
 
@@ -1523,7 +1530,9 @@ def get_app():  # noqa: C901
 
         output.seek(0)
         response = fh.Response(
-            output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=keys.csv"}
+            output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=keys.csv"},
         )
         return response
 

@@ -43,7 +43,7 @@ from utils import (
 
 # -----------------------------------------------------------------------------
 
-MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-dpo-merged-awq"  # pretrained model or ckpt
+MODEL = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained model or ckpt
 TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct"  # pretrained tokenizer
 QUANTIZATION = "awq_marlin"  # "awq_marlin"
 KV_CACHE_DTYPE = None  # "fp8_e5m2"
@@ -82,7 +82,10 @@ def download_model():
                 TOKENIZER,
                 ignore_patterns=["*.pt", "*.bin"],
             )
-            os.rename(f"{tok_path}/preprocessor_config.json", f"{MODEL}/preprocessor_config.json")
+            os.rename(
+                f"{tok_path}/preprocessor_config.json",
+                f"{MODEL}/preprocessor_config.json",
+            )
 
 
 if modal.is_local():
@@ -120,7 +123,14 @@ def get_app():  # noqa: C901
             "min_pixels": MIN_PIXELS,
             "max_pixels": MAX_PIXELS,
         },
-        **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
+        **{
+            k: v
+            for k, v in [
+                ("quantization", QUANTIZATION),
+                ("kv_cache_dtype", KV_CACHE_DTYPE),
+            ]
+            if v is not None
+        },
     )
 
     sampling_params = SamplingParams(
