@@ -2,6 +2,9 @@
 
 Hard handwriting understanding.
 
+A [public API](https://andrewhinh--formless-api-modal-get.modal.run/) accessible via [a website](https://bit.ly/formless-fe) and a [PyPI package](https://pypi.org/project/formless/) to run OCR on hard handwriting images containing math, writing, and more. Prompted while working at EdLight because of the poor quality of existing solutions such as Mathpix for work containing messy handwriting. Utilizes FineWeb-inspired data quality filtering and stratified deduplication alongside SFT and DPO on worst-performing samples to improve VLM performance as measured by character error rate.
+
+
 ## Usage
 
 Use the web app:
@@ -13,7 +16,7 @@ https://bit.ly/formless-fe
 Or hit the API:
 
 ```bash
-curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://bit.ly/formless-api
+curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://andrewhinh--formless-api-modal-get.modal.run/
 ```
 
 Or use the CLI:
@@ -25,6 +28,12 @@ uv run formless -p <local-image-path> [-v]
 ```
 
 Or use in Python:
+
+```bash
+uv add formless
+```
+
+then:
 
 ```python
 from formless import scan
