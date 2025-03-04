@@ -2,7 +2,7 @@
 
 Hard handwriting understanding.
 
-A [public API](https://andrewhinh--formless-api-modal-get.modal.run/) accessible via [a website](https://bit.ly/formless-fe) and a [PyPI package](https://pypi.org/project/formless/) to run OCR on hard handwriting images containing math, writing, and more. Prompted while working at EdLight because of the poor quality of existing solutions such as Mathpix for work containing messy handwriting. Utilizes FineWeb-inspired data quality filtering and stratified deduplication alongside SFT and DPO on worst-performing samples to improve VLM performance as measured by character error rate.
+A hard handwriting image OCR system served via a [public API](https://andrewhinh--formless-api-modal-get.modal.run/), [a website](https://bit.ly/formless-fe), and [PyPI package](https://pypi.org/project/formless/) utilizing fine-tuned Qwen2-VL-7B-Instruct. Used FineWeb-inspired data quality filtering and stratified deduplication alongside SFT and DPO on worst-performing samples to reduce character error rate compared to base model.
 
 
 ## Usage
