@@ -1,6 +1,6 @@
 # formless
 
-Hard handwriting understanding.
+A hard handwriting image OCR system via a public API, website, and PyPI package, utilizing a fine-tuned Qwen2.5-VL-7B-Instruct. Utilizes FineWeb-inspired data quality filtering and stratified deduplication alongside SFT and DPO on worst-performing samples to reduce character error rate by 8.18% compared to the base model.
 
 ## Usage
 
@@ -13,7 +13,7 @@ https://bit.ly/formless-fe
 Or hit the API:
 
 ```bash
-curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://bit.ly/formless-api
+curl -X POST -H "Content-Type: application/json" -d '{"image_url": "<image-url>"}' https://andrewhinh--formless-api-modal-get.modal.run
 ```
 
 Or use the CLI:
@@ -37,49 +37,49 @@ scan(image_path="<local-image-path>", verbose=1)
 Base model:
 
 ```bash
-train CER: 0.9673
-valid CER: 0.9606
-test CER: 0.9961
+train CER: 0.9216
+valid CER: 0.9276
+test CER: 0.9430
 ```
 
 Base quant model:
 
 ```bash
-train CER: 0.9680
-valid CER: 0.9622
-test CER: 0.9984
+train CER: 0.9192
+valid CER: 0.9232
+test CER: 0.9452
 ```
 
 SFT model:
 
 ```bash
-train CER: 0.9771
-valid CER: 0.9850
-test CER: 0.9851
+train CER: 0.7965
+valid CER: 0.8601
+test CER: 0.8659
 ```
 
 SFT quant model:
 
 ```bash
-train CER: 0.9647
-valid CER: 0.9611
-test CER: 0.9763
+train CER: 0.8380
+valid CER: 1.0214
+test CER: 0.8228
 ```
 
 DPO model:
 
 ```bash
-train CER: 0.9772
-valid CER: 0.9846
-test CER: 0.9850
+train CER: 0.7827
+valid CER: 0.8518
+test CER: 0.9757
 ```
 
 DPO quant model:
 
 ```bash
-train CER: 0.9774
-valid CER: 0.9849
-test CER: 0.9859
+train CER: 0.7979
+valid CER: 1.0352
+test CER: 0.9868
 ```
 
 ## Development
@@ -112,8 +112,6 @@ SUPABASE_SERVICE_ROLE_KEY=
 POSTGRES_HOST=
 SUPABASE_ANON_KEY=
 
-LIVE=
-DEBUG=
 STRIPE_PUBLISHABLE_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
@@ -121,11 +119,8 @@ DOMAIN=
 API_URL=
 
 WANDB_API_KEY=
+WANDB_PROJECT=
 WANDB_ENTITY=
-
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_REGION=
 ```
 
 ### Useful Tips
@@ -247,13 +242,13 @@ Download data:
 make data
 ```
 
-Upload to S3 (if using Modal):
+Optionally upload to a Modal volume:
 
 ```bash
-make sync
+make upload
 ```
 
-Label subset of data (~1k samples) to train writing quality classifier:
+Label subset of data to train writing quality classifier:
 
 ```bash
 uv run training/etl.py --cls
@@ -277,7 +272,7 @@ or
 modal run training/train.py --cls
 ```
 
-Use trained classifier to filter train/val/test data (~10k samples) to train VLM using SFT:
+Use trained classifier to filter train/val/test data to train VLM using SFT:
 
 ```bash
 uv run training/etl.py --sft
@@ -361,7 +356,7 @@ or
 modal run training/eval.py --sft --quant
 ```
 
-Run trained VLM on train data and construct new dataset with only relabelled incorrect examples (~1k samples) for DPO training:
+Run trained VLM on train data and construct new dataset with only relabelled incorrect examples for DPO training:
 
 ```bash
 uv run training/etl.py --dpo

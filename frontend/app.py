@@ -1,22 +1,19 @@
-import base64
 import csv
 import io
 import json
 import os
 import secrets
-import subprocess
+import tempfile
 import uuid
 from asyncio import sleep
+from base64 import b64encode
 from contextlib import contextmanager
 from pathlib import Path
 
 import modal
 import requests
 import stripe
-import validators
-from dotenv import load_dotenv
 from fasthtml import common as fh
-from PIL import Image
 from simpleicons.icons import si_github, si_pypi
 from sqlmodel import Session as DBSession
 from sqlmodel import create_engine, select
@@ -37,18 +34,57 @@ from db.models import (
 )
 from utils import (
     APP_NAME,
-    DB_VOL_PATH,
-    IN_PROD,
+    CPU,
+    DEFAULT_IMG_PATHS,
+    EG_PATH,
+    MEM,
     MINUTES,
     PARENT_PATH,
     PYTHON_VERSION,
     SECRETS,
     VOLUME_CONFIG,
+    validate_image_base64,
+    validate_image_file,
+    validate_image_url,
 )
 
 # -----------------------------------------------------------------------------
 
+
+# Modal
 FE_PATH = PARENT_PATH / "frontend"
+IMAGE = (
+    modal.Image.debian_slim(python_version=PYTHON_VERSION)
+    .apt_install("git")
+    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git /root/Python-Antivirus"])
+    .apt_install("libpq-dev")  # for psycopg2
+    .pip_install(  # add Python dependencies
+        "python-fasthtml>=0.12.1",
+        "sqlite-minutils>=4.0.3",  # needed for fasthtml
+        "simpleicons>=7.21.0",
+        "starlette>=0.46.1",
+        "requests>=2.32.3",
+        "stripe>=11.5.0",
+        "validators>=0.34.0",
+        "pillow>=10.4.0",
+        "sqlmodel>=0.0.22",
+        "psycopg2>=2.9.10",
+        "pydantic>=2.10.4",
+        "vllm>=0.7.1",
+    )
+    .add_local_file(FE_PATH / "favicon.ico", "/root/favicon.ico")
+    .add_local_dir(EG_PATH, "/root/eg")
+    .add_local_dir(PARENT_PATH / "db", "/root/db")
+)
+
+TIMEOUT = 5 * MINUTES  # max
+CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
+ALLOW_CONCURRENT_INPUTS = 1000  # max
+
+
+app = modal.App(f"{APP_NAME}-frontend")
+
+# -----------------------------------------------------------------------------
 
 
 def get_app():  # noqa: C901
@@ -78,7 +114,7 @@ def get_app():  # noqa: C901
                 ),
                 toast_container(),
                 footer(),
-                cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+                cls="flex flex-col justify-between min-h-screen text-slate-50 bg-zinc-900 w-full",
             ),
         )
 
@@ -108,8 +144,6 @@ def get_app():  # noqa: C901
                 """
             ),
         ],
-        live=os.getenv("LIVE", False),
-        debug=os.getenv("DEBUG", False),
         boost=True,
     )
     fh.setup_toasts(f_app)
@@ -122,9 +156,6 @@ def get_app():  # noqa: C901
     )
 
     ## db
-    upload_dir = Path(f"{DB_VOL_PATH}/uploads")
-    upload_dir.mkdir(exist_ok=True)
-
     engine = create_engine(url=os.getenv("POSTGRES_URL"), echo=False)
 
     @contextmanager
@@ -212,13 +243,18 @@ def get_app():  # noqa: C901
             return None
 
         image_src = None
-        if g.image_url and validate_image_url(g.image_url):
+        if g.image_url:
+            res = validate_image_url(g.image_url)
+            if "error" in res.keys():
+                fh.add_toast(session, res["error"], "error")
+                return None
             image_src = g.image_url
-        elif g.image_file and isinstance(validate_image_file(image_file=None, upload_path=Path(g.image_file)), Path):
-            with open(g.image_file, "rb") as f:
-                image_data = f.read()
-            b64_image = base64.b64encode(image_data).decode("utf-8")
-            image_src = f"data:image/{Path(g.image_file).suffix[1:]};base64,{b64_image}"
+        elif g.image_b64:
+            res = validate_image_base64(g.image_b64)
+            if "error" in res.keys():
+                fh.add_toast(session, res["error"], "error")
+                return None
+            image_src = f"data:image/png;base64,{g.image_b64}"
 
         if g.failed:
             return fh.Card(
@@ -697,32 +733,63 @@ def get_app():  # noqa: C901
     ):
         curr_gen_form = session["gen_form"]
         return fh.Main(
-            fh.Div(
-                gen_form_toggle(curr_gen_form),
-                fh.Div(
-                    id="gen-form",
-                    hx_get=f"/get-gen-form?view={curr_gen_form}",
-                    hx_indicator="#spinner",
-                    hx_target="#gen-form",
-                    hx_swap="outerHTML",
-                    hx_trigger="load",
-                ),
-                cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center items-center",
+            fh.H1(
+                "Hard Handwriting Image OCR",
+                cls="text-2xl font-bold text-center",
             ),
-            num_gens(session),
-            fh.Form(
-                gen_manage(session),
+            fh.Div(
                 fh.Div(
-                    get_gen_table_part(session),
-                    id="gen-list",
-                    cls="w-full flex flex-col gap-2",
+                    gen_form_toggle(curr_gen_form),
+                    fh.Div(
+                        id="gen-form",
+                        hx_get=f"/get-gen-form?view={curr_gen_form}",
+                        hx_indicator="#spinner",
+                        hx_target="#gen-form",
+                        hx_swap="outerHTML",
+                        hx_trigger="load",
+                    ),
+                    cls="w-full flex flex-col gap-4 justify-center items-center items-center",
+                ),
+                fh.Div(
+                    *[
+                        fh.A(
+                            fh.Img(
+                                src=f"data:image/png;base64,{b64encode(open(img_path, 'rb').read()).decode('utf-8')}",
+                                alt=f"Image {i+1}",
+                                cls="w-full h-auto object-contain hover:cursor-pointer hover:opacity-70",
+                            ),
+                            href="#",
+                            hx_post="/upload",
+                            hx_target="#gen-list",
+                            hx_swap="afterbegin",
+                            hx_trigger="click",
+                            hx_encoding="multipart/form-data",
+                            hx_vals=json.dumps(
+                                {
+                                    "image_path": str(img_path),
+                                }
+                            ),
+                        )
+                        for i, img_path in enumerate(DEFAULT_IMG_PATHS)
+                    ],
+                    cls="w-full grid grid-cols-2 md:grid-cols-4 gap-4",
+                ),
+                num_gens(session),
+                fh.Form(
+                    gen_manage(session),
+                    fh.Div(
+                        get_gen_table_part(session),
+                        id="gen-list",
+                        cls="w-full flex flex-col gap-2",
+                    ),
+                    cls="w-full flex flex-col gap-4 justify-center items-center",
+                ),
+                gen_load_more(
+                    session,
                 ),
                 cls="w-full md:w-2/3 flex flex-col gap-4 justify-center items-center",
             ),
-            gen_load_more(
-                session,
-            ),
-            cls="flex flex-col justify-start items-center grow gap-4 p-8",
+            cls="flex flex-col justify-start items-center grow gap-8 p-8",
         )
 
     def developer_page(
@@ -796,69 +863,11 @@ def get_app():  # noqa: C901
         )
 
     # helper fns
-    ## validation
-    def validate_image_url(image_url: str) -> bool:
-        return validators.url(image_url)
-
-    def validate_image_file(image_file: fh.UploadFile = None, upload_path: Path = None) -> str | Path:
-        if image_file is not None:
-            # Ensure extension is valid image
-            valid_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"}
-            file_extension = Path(image_file.filename).suffix.lower()
-            if file_extension not in valid_extensions:
-                return "Invalid file type. Please upload an image."
-
-            # Write file to disk
-            filebuffer = image_file.file.read()
-            upload_path = upload_dir / f"{uuid.uuid4()}{file_extension}"
-            upload_path.write_bytes(filebuffer)
-
-        # Verify upload path
-        if not upload_path.exists():
-            return "Error: File not found."
-
-        # Verify MIME type and magic #
-        img = Image.open(upload_path)
-        try:
-            img.verify()
-        except Exception as e:
-            os.remove(upload_path)
-            return f"Error: {e}"
-
-        # Limit img size
-        MAX_FILE_SIZE_MB = 5
-        MAX_DIMENSIONS = (4096, 4096)
-        if os.path.getsize(upload_path) > MAX_FILE_SIZE_MB * 1024 * 1024:
-            os.remove(upload_path)
-            return f"File size exceeds {MAX_FILE_SIZE_MB}MB limit."
-        with Image.open(upload_path) as img:
-            if img.size[0] > MAX_DIMENSIONS[0] or img.size[1] > MAX_DIMENSIONS[1]:
-                os.remove(upload_path)
-                return f"Image dimensions exceed {MAX_DIMENSIONS[0]}x{MAX_DIMENSIONS[1]} pixels limit."
-
-        # Run antivirus
-        try:
-            result = subprocess.run(  # noqa: S603
-                ["python", "main.py", str(upload_path)],  # noqa: S607
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=PARENT_PATH / "Python-Antivirus",
-            )
-            scan_result = result.stdout.strip().lower()
-            if scan_result == "infected":
-                os.remove(upload_path)
-                return "Potential threat detected."
-        except Exception as e:
-            os.remove(upload_path)
-            return f"Error during antivirus scan: {e}"
-
-        return upload_path
-
     ## generation
     @fh.threaded
     def generate_and_save(
         g: Gen,
+        image_file: fh.UploadFile,
         session,
     ):
         k = ApiKeyCreate(session_id=session["session_id"])
@@ -872,17 +881,22 @@ def get_app():  # noqa: C901
                     headers={"X-API-Key": k.key},
                     timeout=api_timeout,
                 )
-            elif g.image_file:
+            elif g.image_b64:
+                path = EG_PATH / image_file.filename
+                if not path.exists():  # any non-default input
+                    image_file.file.seek(0)  # reset pointer in case of multiple uploads
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(image_file.filename).suffix) as tmp_file:
+                        tmp_file.write(image_file.file.read())
+                        path = tmp_file.name
                 response = requests.post(
                     f"{os.getenv('API_URL')}/upload",
-                    files={"image": open(g.image_file, "rb")},
+                    files={"image_file": open(path, "rb")},
                     headers={
                         "X-API-Key": k.key,
                     },
                     timeout=api_timeout,
                 )
             if not response.ok:
-                os.remove(g.image_file)
                 raise Exception(f"Failed with status code: {response.status_code}")
             g.response = response.json()
         except Exception as e:
@@ -936,6 +950,7 @@ def get_app():  # noqa: C901
                     fh.P(
                         "Generation failed",
                         cls="text-red-300",
+                        sse_swap="UpdateGens",
                     ))}\n\n"""
             await sleep(1)
 
@@ -961,7 +976,7 @@ def get_app():  # noqa: C901
     def get_key_table_part(session, part_num: int = 1, size: int = max_keys):
         curr_keys = get_curr_keys(session["session_id"], number=size, offset=(part_num - 1) * size)
         global shown_keys
-        shown_keys = set(shown_keys) | {k.id for k in curr_keys}
+        shown_keys = list(set(shown_keys) | {k.id for k in curr_keys})
         read_keys = [ApiKeyRead.model_validate(k) for k in curr_keys]
         paginated = [key_view(k, session) for k in read_keys]
         return tuple(paginated)
@@ -992,7 +1007,7 @@ def get_app():  # noqa: C901
                 main_content(session),
                 toast_container(),
                 footer(),
-                cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+                cls="flex flex-col justify-between min-h-screen text-slate-50 bg-zinc-900 w-full",
             ),
             fh.Script(
                 """
@@ -1017,7 +1032,7 @@ def get_app():  # noqa: C901
                 developer_page(session),
                 toast_container(),
                 footer(),
-                cls="flex flex-col justify-between min-h-screen text-slate-100 bg-zinc-900 w-full",
+                cls="flex flex-col justify-between min-h-screen text-slate-50 bg-zinc-900 w-full",
             ),
             fh.Script(
                 """
@@ -1103,8 +1118,9 @@ def get_app():  # noqa: C901
     ## input validation
     @f_app.post("/check-url")
     def check_url(session, image_url: str):
-        if not validate_image_url(image_url):
-            fh.add_toast(session, "Invalid image URL", "error")
+        res = validate_image_url(image_url)
+        if "error" in res.keys():
+            fh.add_toast(session, res["error"], "error")
         return (
             fh.Input(
                 value=image_url,
@@ -1124,8 +1140,8 @@ def get_app():  # noqa: C901
         image_file: fh.UploadFile,
     ):
         res = validate_image_file(image_file)
-        if isinstance(res, str):
-            fh.add_toast(session, res, "error")
+        if "error" in res.keys():
+            fh.add_toast(session, res["error"], "error")
         return fh.Div(cls="hidden")
 
     ## pagination
@@ -1157,8 +1173,9 @@ def get_app():  # noqa: C901
         if not image_url:
             fh.add_toast(session, "No image URL provided", "error")
             return None
-        if not validate_image_url(image_url):
-            fh.add_toast(session, "Invalid image URL", "error")
+        res = validate_image_url(image_url)
+        if "error" in res.keys():
+            fh.add_toast(session, res["error"], "error")
             return None
 
         # Warn if we're out of balance
@@ -1195,7 +1212,7 @@ def get_app():  # noqa: C901
             db_session.refresh(g)
         global shown_generations
         shown_generations[g.id] = "loading"
-        generate_and_save(g, session)
+        generate_and_save(g, None, session)
         g_read = GenRead.model_validate(g)
         return (
             gen_view(g_read, session),
@@ -1211,17 +1228,19 @@ def get_app():  # noqa: C901
     @f_app.post("/upload")
     def generate_from_upload(
         session,
-        image_file: fh.UploadFile,
+        image_file: fh.UploadFile = None,
+        image_path: str = None,
     ):
-        if not image_file:
-            fh.add_toast(session, "No image uploaded", "error")
+        if not image_file and not image_path:
+            fh.add_toast(session, "No image file provided", "error")
             return None
+        if not image_file and image_path:
+            image_file = fh.UploadFile(filename=image_path, file=open(image_path, "rb"))
         res = validate_image_file(image_file)
-        if isinstance(res, str):
-            fh.add_toast(session, res, "error")
+        if "error" in res.keys():
+            fh.add_toast(session, res["error"], "error")
             return None
-        else:
-            upload_path = res
+
         curr_balance = get_curr_balance()
         if curr_balance.balance < 1:
             fh.add_toast(session, "Out of balance!", "error")
@@ -1244,7 +1263,7 @@ def get_app():  # noqa: C901
 
         # Generate as before
         g = GenCreate(
-            image_file=str(upload_path),
+            image_b64=list(res.values())[0],
             session_id=session["session_id"],
         )
         ## need to put in db since generate_and_save is threaded
@@ -1255,7 +1274,7 @@ def get_app():  # noqa: C901
             db_session.refresh(g)
         global shown_generations
         shown_generations[g.id] = "loading"
-        generate_and_save(g, session)
+        generate_and_save(g, image_file, session)
         g_read = GenRead.model_validate(g)
         return (
             gen_view(g_read, session),
@@ -1300,13 +1319,9 @@ def get_app():  # noqa: C901
         gens = get_curr_gens(session["session_id"])
         global shown_generations
         for g in gens:
-            if g and g.image_file and os.path.exists(g.image_file):
-                os.remove(g.image_file)
             with get_db_session() as db_session:
                 db_session.delete(g)
                 db_session.commit()
-                if not modal.is_local():
-                    VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
             shown_generations.pop(g.id, None)
         fh.add_toast(session, "Deleted generations.", "success")
         return (
@@ -1314,8 +1329,7 @@ def get_app():  # noqa: C901
             num_gens(session, "true"),
             gen_manage(
                 session,
-                False,
-                "true",
+                hx_swap_oob="true",
             ),
             gen_load_more(
                 session,
@@ -1338,8 +1352,7 @@ def get_app():  # noqa: C901
             num_keys(session, "true"),
             key_manage(
                 session,
-                False,
-                "true",
+                hx_swap_oob="true",
             ),
             key_load_more(
                 session,
@@ -1354,12 +1367,8 @@ def get_app():  # noqa: C901
             select_gens = get_curr_gens(session["session_id"], ids=selected_gens)
             with get_db_session() as db_session:
                 for g in select_gens:
-                    if g and g.image_file and os.path.exists(g.image_file):
-                        os.remove(g.image_file)
                     db_session.delete(g)
                     db_session.commit()
-                    if not modal.is_local():
-                        VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
                     shown_generations.pop(g.id, None)
             fh.add_toast(session, "Deleted generations.", "success")
             remain_gens = get_curr_gens(session["session_id"], ids=list(shown_generations.keys()))
@@ -1369,8 +1378,7 @@ def get_app():  # noqa: C901
                 num_gens(session, "true"),
                 gen_manage(
                     session,
-                    False,
-                    "true",
+                    hx_swap_oob="true",
                 ),
                 gen_load_more(
                     session,
@@ -1399,8 +1407,7 @@ def get_app():  # noqa: C901
                 num_keys(session, "true"),
                 key_manage(
                     session,
-                    False,
-                    "true",
+                    hx_swap_oob="true",
                 ),
                 key_load_more(
                     session,
@@ -1436,8 +1443,6 @@ def get_app():  # noqa: C901
                 os.remove(gen.image_file)
             db_session.delete(gen)
             db_session.commit()
-            if not modal.is_local():
-                VOLUME_CONFIG[f"{DB_VOL_PATH}"].commit()
         global shown_generations
         shown_generations.pop(gen_id, None)
         fh.add_toast(session, "Deleted generation.", "success")
@@ -1446,8 +1451,7 @@ def get_app():  # noqa: C901
             num_gens(session, "true"),
             gen_manage(
                 session,
-                False,
-                "true",
+                hx_swap_oob="true",
             ),
             gen_load_more(
                 session,
@@ -1472,8 +1476,7 @@ def get_app():  # noqa: C901
             num_keys(session, "true"),
             key_manage(
                 session,
-                False,
-                "true",
+                hx_swap_oob="true",
             ),
             key_load_more(
                 session,
@@ -1493,13 +1496,14 @@ def get_app():  # noqa: C901
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["request_at", "image_url", "image_file", "response", "failed"])
+        writer.writerow(["session_id", "request_at", "image_url", "image_b64", "response", "failed"])
         for g in curr_gens:
             writer.writerow(
                 [
+                    session["session_id"],
                     g.request_at,
                     g.image_url,
-                    Path(g.image_file).name,
+                    g.image_b64,
                     g.response,
                     g.failed,
                 ]
@@ -1524,9 +1528,9 @@ def get_app():  # noqa: C901
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["key", "granted_at"])
+        writer.writerow(["session_id", "key", "granted_at"])
         for k in curr_keys:
-            writer.writerow([k.key, k.granted_at])
+            writer.writerow([session["session_id"], k.key, k.granted_at])
 
         output.seek(0)
         response = fh.Response(
@@ -1608,51 +1612,20 @@ def get_app():  # noqa: C901
     return f_app
 
 
-load_dotenv(".env" if IN_PROD else ".env.dev")
 f_app = get_app()
-
-# -----------------------------------------------------------------------------
-
-# Modal
-IMAGE = (
-    modal.Image.debian_slim(python_version=PYTHON_VERSION)
-    .apt_install("git")
-    .run_commands(["git clone https://github.com/Len-Stevens/Python-Antivirus.git /root/Python-Antivirus"])
-    .apt_install("libpq-dev")  # for psycopg2
-    .pip_install(  # add Python dependencies
-        "python-fasthtml==0.12.1",
-        "sqlite-minutils==4.0.3",  # needed for fasthtml
-        "simpleicons==7.21.0",
-        "requests==2.32.3",
-        "stripe==11.5.0",
-        "validators==0.34.0",
-        "pillow==10.4.0",
-        "sqlmodel==0.0.22",
-        "psycopg2==2.9.10",
-        "huggingface_hub[hf_transfer]==0.29.1",
-    )
-    .add_local_file(FE_PATH / "favicon.ico", "/root/favicon.ico")
-    .add_local_dir(PARENT_PATH / "db", "/root/db")
-    .add_local_python_source("db", "utils")
-)
-
-FE_TIMEOUT = 5 * MINUTES  # max
-FE_CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
-FE_ALLOW_CONCURRENT_INPUTS = 1000  # max
-
-
-app = modal.App(f"{APP_NAME}-frontend")
 
 # -----------------------------------------------------------------------------
 
 
 @app.function(
     image=IMAGE,
+    cpu=CPU,
+    memory=MEM,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
-    timeout=FE_TIMEOUT,
-    container_idle_timeout=FE_CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=FE_ALLOW_CONCURRENT_INPUTS,
+    timeout=TIMEOUT,
+    container_idle_timeout=CONTAINER_IDLE_TIMEOUT,
+    allow_concurrent_inputs=ALLOW_CONCURRENT_INPUTS,
 )
 @modal.asgi_app()
 def modal_get():

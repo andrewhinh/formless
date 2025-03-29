@@ -1,6 +1,5 @@
 """ETL for data to train classifiers and VLMs."""
 
-import base64
 import hashlib
 import json
 import logging
@@ -8,7 +7,6 @@ import math
 import multiprocessing
 import os
 import random
-from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -19,155 +17,69 @@ from xml.etree import ElementTree
 import cairo
 import modal
 import numpy as np
+import pandas as pd
 import torch
 import yaml
-from datasketch import MinHash
-from dotenv import load_dotenv
-from huggingface_hub import login
+from datasketch import MinHash, MinHashLSH
 from imagehash import phash
 from more_itertools import chunked
 from PIL import Image, ImageFile, ImageFilter
 from pydantic import Field
-from pyspark.ml.feature import MinHashLSH
-from pyspark.ml.linalg import Vectors, VectorUDT
-from pyspark.sql import Row, SparkSession
-from pyspark.sql.functions import coalesce, col, lit, udf
-from pyspark.sql.types import ArrayType, IntegerType, StringType
 from timm.data import create_transform, resolve_data_config
 from timm.layers import apply_test_time_pool
 from timm.models import create_model
 from timm.utils import set_jit_fuser, setup_default_logging
 from tqdm import tqdm
 from tqdm.contrib.concurrent import thread_map
-from vllm import LLM, SamplingParams
 from vllm.sampling_params import GuidedDecodingParams
 
 from utils import (
     APP_NAME,
-    DATA_VOLUME,
-    DEFAULT_QUESTION,
-    DEFAULT_SYSTEM_PROMPT,
+    BASE_QUANT_MODEL,
+    CLASSES,
+    CLS_HF_RATER,
+    CPU,
+    DATA_VOL_PATH,
+    DEFAULT_USER_PROMPT,
     GPU_IMAGE,
-    HF_USERNAME,
-    IN_PROD,
+    MAX_NUM_SEQS,
+    MAX_PIXELS,
+    MEM,
+    MIN_PIXELS,
     MINUTES,
-    PARENT_PATH,
-    REGION,
+    RANDOM_SEED,
     SECRETS,
+    SFT_QUANT_MODEL,
+    SPLITS,
     VOLUME_CONFIG,
+    run_model,
 )
 
 # setup
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-TABLE_BS = 65536  # so no memory overload when pulling data from df
-RANDOM_SEED = 42
 logging.getLogger("timm").setLevel(
     logging.WARNING
 )  # disable "Safe alternative available for 'pytorch_model.bin' (as 'model.safetensors'). Loading weights using safetensors.""
-spark = (
-    SparkSession.builder.config("spark.executor.memory", "20G")
-    .config("spark.driver.memory", "20G")
-    .config("spark.driver.maxResultSize", "1G")
-    .config("spark.sql.shuffle.partitions", "300")
-    .config("spark.worker.cleanup.enabled", "true")
-    .config("spark.worker.cleanup.interval", "1800")
-    .config("spark.worker.cleanup.appDataTtl", "86400")
-    .config("spark.local.dir", "/tmp/spark-temp")  # noqa: S108
-    .config("spark.dynamicAllocation.enabled", "true")
-    .config("spark.dynamicAllocation.minExecutors", "1")
-    .config("spark.dynamicAllocation.maxExecutors", "10")
-    .config("spark.sql.adaptive.enabled", "true")
-    .config("spark.sql.parquet.compression.codec", "snappy")
-    .config("spark.sql.autoBroadcastJoinThreshold", -1)
-    .getOrCreate()
-)
-random.seed(RANDOM_SEED)
-load_dotenv(".env" if IN_PROD else ".env.dev")
-
-# -----------------------------------------------------------------------------
-
-# vlm config
-
-QUANTIZATION = "awq_marlin"  # "awq_marlin"
-KV_CACHE_DTYPE = None  # "fp8_e5m2"
-ENFORCE_EAGER = False
-MAX_NUM_SEQS = 16  # max for 3090
-MIN_PIXELS = 28 * 28
-MAX_PIXELS = 1280 * 28 * 28
-TEMPERATURE = 0.0
-TOP_P = 0.001
-REPEATION_PENALTY = 1.05
-STOP_TOKEN_IDS = []
-
-MAX_SCORE_TOKENS = 3
-MAX_VLM_TOKENS = 2048
-
-# LATEX_GRAMMER = """
-# start: math_expr
-
-# math_expr: inline_math | display_math
-
-# inline_math: "$" expr "$"
-# display_math: BEGIN "{" ENV "}" expr END "{" ENV "}"
-
-# ?expr: term
-#      | expr operator term   -> binop
-
-# ?term: NUMBER
-#      | VARIABLE
-#      | function
-#      | "{" expr "}"
-#      | FRAC "{" expr "}" "{" expr "}"
-
-# function: SIN "(" expr ")"
-#         | COS "(" expr ")"
-#         | TAN "(" expr ")"
-#         | LOG "(" expr ")"
-#         | EXP "(" expr ")"
-#         | SQRT "{" expr "}"
-
-# operator: "+" | "-" | "*" | "/" | "=" | "^"
-
-# BEGIN: "\\begin"
-# END: "\\end"
-# FRAC: "\\frac"
-# SIN: "\\sin"
-# COS: "\\cos"
-# TAN: "\\tan"
-# LOG: "\\log"
-# EXP: "\\exp"
-# SQRT: "\\sqrt"
-
-# ENV: /[a-zA-Z]+/
-
-# %import common.NUMBER
-# %import common.CNAME -> VARIABLE
-# %import common.WS
-# %ignore WS
-# """
-
 
 # -----------------------------------------------------------------------------
 
 # classifier training data config
 
-SPLITS = ["train", "valid", "test"]
-N_SAMPLES_PER_SPLIT_CLS = {
-    "train": 800.0,
-    "valid": 100.0,
-    "test": 100.0,
-}
-CLASSES = ["1", "2", "3"]
+MAX_SCORE_TOKENS = 3
 
-SLOW_RATER = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained model or ckpt
-SLOW_RATER_TOKENIZER = "Qwen/Qwen2-VL-7B-Instruct-AWQ"  # pretrained tokenizer
+N_SAMPLES_PER_SPLIT_CLS = {
+    "train": 5,
+    "valid": 5,
+    "test": 5,
+}
+
 DIFFICULTY_PROMPT = """
 You are given an image of a handwritten math expression and its corresponding annotation.
 Determine the grade level of the expression in the image using the additive 3-point scoring system described below.
 Points are accumulated based on the satisfaction of each criterion:
-1) Add 1 point if the expression is something that an elementary to middle school student could understand.
-2) Add another point if the expression is something that a high school student could understand.
-3) Add a third point if the expression is something that an undergrad to grad student could understand.
+1) Add 1 point if the expression is something that an elementary student could understand.
+2) Add another point if the expression is something that only a middle/high school student could understand.
+3) Add a third point if the expression is something that only an undergrad/grad/phd student could understand.
 Return the difficulty of the expression as a number between 1 and 3 where
 1 is the easiest and 3 is the most difficult.
 """
@@ -176,8 +88,7 @@ Return the difficulty of the expression as a number between 1 and 3 where
 
 # sft training data config
 
-FAST_RATER = f"hf_hub:{HF_USERNAME}/{APP_NAME}-resnet152-difficulty"
-CLS_RUN_BS = 2048  # max on RTX 3090
+CLS_RUN_BS = 1024
 
 ## imports
 
@@ -220,60 +131,18 @@ TOPK = 1  # Top-k
 ## dedup
 NUM_PERM = 64  # larger = high acc but high mem usage
 HASH_SZ = 8  # larger = more accurate but slower
-THRESHOLD = 0.2  # larger = less duplicates
+THRESHOLD = 0.9  # larger = less duplicates
 N_SAMPLES_PER_SPLIT_SFT = {
-    "train": 800,
-    "valid": 100,
-    "test": 100,
+    "train": 8000,
+    "valid": 1000,
+    "test": 1000,
 }  # only train data will be written to json, valid/test will be used for eval
 
 ## stitch
-STITCH_BS_MAX = 128  # 128 ~= 2048 tokens
-ROTATE_MAX = 10  # degrees
-
-## json paths
-if modal.is_local():
-    DATA_VOL_PATH = str(PARENT_PATH / "training" / "artifacts" / "mathwriting-2024")
-    if not os.path.exists(DATA_VOL_PATH):
-        raise Exception(f"""
-{DATA_VOL_PATH} does not exist.
-""")
-else:
-    DATA_VOL_PATH = f"/{DATA_VOLUME}"
-SFT_TRAIN_JSON = Path(f"{DATA_VOL_PATH}/sft_train.json")
-SFT_VAL_JSON = Path(f"{DATA_VOL_PATH}/sft_valid.json")
-SFT_TEST_JSON = Path(f"{DATA_VOL_PATH}/sft_test.json")
+STITCH_BS_MAX = 1024  # 1024 ~= 16384 tokens
+ROTATE_MAX = 180  # degrees
 
 # -----------------------------------------------------------------------------
-
-# dpo training data config
-
-SLOW_RUNNER = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained model or ckpt
-SLOW_RUNNER_TOKENIZER = f"{HF_USERNAME}/{APP_NAME}-qwen2-vl-7b-instruct-lora-sft-merged-awq"  # pretrained tokenizer
-DPO_TRAIN_JSON = Path(f"{DATA_VOL_PATH}/dpo_train.json")
-
-# -----------------------------------------------------------------------------
-
-
-## container startup fn
-def download_models():
-    from huggingface_hub import snapshot_download
-
-    login(token=os.getenv("HF_TOKEN"), new_session=False)
-
-    for model in [SLOW_RATER, SLOW_RATER_TOKENIZER, FAST_RATER.split("hf_hub:")[1], SLOW_RUNNER, SLOW_RUNNER_TOKENIZER]:
-        if not os.path.exists(model):
-            snapshot_download(
-                model,
-                ignore_patterns=["*.pt", "*.bin"],
-            )
-        else:  # check if preprocessor_config.json was successfully copied; if not, do so
-            if not os.path.exists(f"{model}/preprocessor_config.json"):
-                tok_path = snapshot_download(
-                    model,
-                    ignore_patterns=["*.pt", "*.bin"],
-                )
-                os.rename(f"{tok_path}/preprocessor_config.json", f"{model}/preprocessor_config.json")
 
 
 def setup_classifier(model_name: str):  # noqa: C901
@@ -330,33 +199,22 @@ def setup_classifier(model_name: str):  # noqa: C901
 # -----------------------------------------------------------------------------
 
 # Modal
-IMAGE = (
-    GPU_IMAGE.apt_install(
-        [
-            "libcairo2-dev",  # required to build pycairo
-            "libjpeg-dev",  # required to build pycairo
-            "libgif-dev",  # required to build pycairo
-            "openjdk-11-jdk",  # required to build pyspark
-        ]
-    )
-    .pip_install(
-        "pycairo==1.27.0",
-        "pydantic==2.10.4",
-        "tqdm==4.67.1",
-        "datasketch==1.6.5",
-        "ImageHash==4.3.2",
-        "pyspark==3.5.4",
-    )
-    .run_function(
-        download_models,
-        secrets=SECRETS,
-        volumes=VOLUME_CONFIG,
-    )
+IMAGE = GPU_IMAGE.apt_install(
+    [
+        "libcairo2-dev",  # required to build pycairo
+        "libjpeg-dev",  # required to build pycairo
+        "libgif-dev",  # required to build pycairo
+    ]
+).pip_install(
+    "pycairo>=1.27.0",
+    "pydantic>=2.10.4",
+    "datasketch>=1.6.5",
+    "imagehash>=4.3.2",
+    "pandas>=2.2.3",
 )
 TIMEOUT = 24 * 60 * MINUTES
 
-GPU_TYPE = "l4"
-GPU_SIZE = None  # options = None, "40GB", "80GB"
+GPU_TYPE = "L40S"
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 
 app = modal.App(name=f"{APP_NAME}-etl")
@@ -453,7 +311,7 @@ def render_ink(
 
 @app.function(
     image=IMAGE,
-    region=REGION,
+    cpu=CPU,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -492,64 +350,11 @@ def extract_ink_metadata(input_path: Path) -> dict[Path, str]:
     return {"img_path": save_path, "label": label}
 
 
-def run_model(
-    img_paths: list[Path], model: str, prompt: str, max_tokens: int = None, guided_decoding: GuidedDecodingParams = None
-) -> list[str]:
-    """
-    Run model on image(s) with prompt.
-    """
-    conversations = []
-    for img_path in img_paths:
-        with open(img_path, "rb") as image_file:
-            base64_img = base64.b64encode(image_file.read()).decode("utf-8")
-        img_url = f"data:image/jpeg;base64,{base64_img}"
-        conversations.append(
-            [
-                {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": img_url}},
-                    ],
-                },
-            ]
-        )
-
-    global llm
-    global sampling_params
-    # load pretrained vlm if not already loaded
-    if "llm" not in globals():
-        llm = LLM(
-            model=model,
-            enforce_eager=ENFORCE_EAGER,
-            max_num_seqs=MAX_NUM_SEQS,
-            tensor_parallel_size=GPU_COUNT,
-            trust_remote_code=True,
-            mm_processor_kwargs={
-                "min_pixels": MIN_PIXELS,
-                "max_pixels": MAX_PIXELS,
-            },
-            **{k: v for k, v in [("quantization", QUANTIZATION), ("kv_cache_dtype", KV_CACHE_DTYPE)] if v is not None},
-        )
-    if "sampling_params" not in globals():
-        sampling_params = SamplingParams(
-            temperature=TEMPERATURE,
-            top_p=TOP_P,
-            repetition_penalty=REPEATION_PENALTY,
-            max_tokens=max_tokens,
-            stop_token_ids=STOP_TOKEN_IDS,
-            guided_decoding=guided_decoding,
-        )
-    outputs = llm.chat(conversations, sampling_params, use_tqdm=True)
-    preds = [out.outputs[0].text.strip() for out in outputs]
-    return preds
-
-
 @app.function(
     image=IMAGE,
+    cpu=CPU,
+    memory=MEM,
     gpu=GPU_CONFIG,
-    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -559,11 +364,13 @@ def analyze_inks(img_paths: list[Path]) -> list[int]:
     Analyze ink(s) and return score(s).
     """
     preds = run_model(
-        SLOW_RATER,
-        DIFFICULTY_PROMPT,
-        MAX_SCORE_TOKENS,
-        GuidedDecodingParams(choice=[int(cls) for cls in CLASSES]),
         img_paths,
+        BASE_QUANT_MODEL,
+        DIFFICULTY_PROMPT,
+        quant=True,
+        gpu_count=GPU_COUNT,
+        max_tokens=MAX_SCORE_TOKENS,
+        guided_decoding=GuidedDecodingParams(choice=CLASSES),
     )
     scores = [int(pred) for pred in preds]
     for img_path, score in zip(img_paths, scores, strict=True):
@@ -576,7 +383,9 @@ def analyze_inks(img_paths: list[Path]) -> list[int]:
 
 @app.function(
     image=IMAGE,
-    region=REGION,
+    cpu=CPU,
+    memory=MEM,
+    gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -587,7 +396,7 @@ def classify_ink(img_paths: list[Path]) -> list[int]:
     """
     global transforms, amp_autocast, classifier
     if "classifier" not in globals():
-        transforms, amp_autocast, classifier = setup_classifier(FAST_RATER)
+        transforms, amp_autocast, classifier = setup_classifier(CLS_HF_RATER)
         classifier.eval()
 
     img_pts = torch.cat(
@@ -625,7 +434,7 @@ def compute_minhash(phash_str):
 
 @app.function(
     image=IMAGE,
-    region=REGION,
+    cpu=CPU,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -703,7 +512,7 @@ def write_sft_json(json_path: Path, img_paths: list, labels: list):
                     "conversations": [
                         {
                             "from": "human",
-                            "value": f"<image>{DEFAULT_QUESTION}",
+                            "value": f"<image>{DEFAULT_USER_PROMPT}",
                         },
                         {
                             "from": "gpt",
@@ -727,7 +536,8 @@ def write_sft_json(json_path: Path, img_paths: list, labels: list):
 
 @app.function(
     image=IMAGE,
-    region=REGION,
+    cpu=CPU,
+    memory=MEM,
     gpu=GPU_CONFIG,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
@@ -739,9 +549,10 @@ def ft_pred_ink(img_paths: list[Path]) -> list[str]:
     """
     return run_model(
         img_paths,
-        SLOW_RUNNER,
-        DEFAULT_QUESTION,
-        MAX_VLM_TOKENS,
+        SFT_QUANT_MODEL,
+        DEFAULT_USER_PROMPT,
+        quant=True,
+        gpu_count=GPU_COUNT,
         # GuidedDecodingParams(grammar=LATEX_GRAMMER, backend="outlines"),
     )
 
@@ -754,7 +565,7 @@ def write_dpo_json(json_path: Path, img_paths: list, preds: list, labels: list):
                     "conversations": [
                         {
                             "from": "human",
-                            "value": f"<image>{DEFAULT_QUESTION}",
+                            "value": f"<image>{DEFAULT_USER_PROMPT}",
                         },
                     ],
                     "chosen": {
@@ -790,21 +601,21 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
     if not cls and not sft and not dpo:
         raise ValueError("Must specify at least one of `cls`, `sft`, or `dpo`")
 
-    PARQUET_FILENAME = f"{DATA_VOL_PATH}/data.parquet"
+    CSV_FILENAME = str(DATA_VOL_PATH / "data.csv")
 
-    df = spark.createDataFrame([], schema="img_path string, label string, split string")
+    df = pd.DataFrame([], columns=["img_path", "label", "split"])
     split_cts = {}
-    if os.path.exists(PARQUET_FILENAME):
-        print(f"Loading existing dataframe from {PARQUET_FILENAME}")
-        df = spark.read.parquet(PARQUET_FILENAME)
+    if os.path.exists(CSV_FILENAME):
+        print(f"Loading existing dataframe from {CSV_FILENAME}")
+        df = pd.read_csv(CSV_FILENAME)
         for split in SPLITS:
-            split_cts[split] = df.filter(col("split") == split).count()
+            split_cts[split] = len(df[df["split"] == split])
             print(f"Loaded {split_cts[split]} samples for split {split}")
     else:
         print(f"Creating new dataframe from {DATA_VOL_PATH}")
         for split in SPLITS:
             # extract ink metadata
-            ink_paths = list(Path(f"{DATA_VOL_PATH}/{split}").glob("*.inkml"))
+            ink_paths = [Path(p) for p in (DATA_VOL_PATH / split).glob("*.inkml")]
             if modal.is_local():
                 split_stats = list(
                     tqdm(
@@ -821,37 +632,38 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 split_stats = list(extract_ink_metadata.map(ink_paths))
 
             # write to df
-            split_df = spark.createDataFrame(
+            split_df = pd.DataFrame(
                 [
-                    Row(
-                        img_path=str(stat["img_path"]),
-                        label=stat["label"],
-                        split=split,
-                    )
+                    {
+                        "img_path": str(stat["img_path"]),
+                        "label": stat["label"],
+                        "split": split,
+                    }
                     for stat in split_stats
-                ],
-                schema=df.schema,
+                ]
             )
-            split_cts[split] = split_df.count()
-            new_entries = split_df.join(df, on=["img_path", "split"], how="left_anti")
-            df = df.unionByName(new_entries.select(df.columns))
+            split_cts[split] = len(split_df)
+            new_entries = split_df[
+                ~split_df.set_index(["img_path", "split"]).index.isin(df.set_index(["img_path", "split"]).index)
+            ]
+            df = pd.concat([df, new_entries], ignore_index=True)
             print(f"Collected {split_cts[split]} samples for split {split}")
 
-        df.write.mode("overwrite").parquet(PARQUET_FILENAME)
+        df.to_csv(CSV_FILENAME, index=False)
 
     if cls:
         # run VLM to assign score to random subset
-        df = df.withColumn("score", lit(None).cast(IntegerType()))
+        df["score"] = None
         df_parts = []
         for split in SPLITS:
             ## get random subset of split data
-            split_df = df.filter(col("split") == split)
-            split_df = split_df.sample(False, N_SAMPLES_PER_SPLIT_CLS[split] / split_cts[split], float(RANDOM_SEED))
+            split_df = df[df["split"] == split]
+            split_df = split_df.sample(
+                n=min(N_SAMPLES_PER_SPLIT_CLS[split], len(split_df)), random_state=int(RANDOM_SEED)
+            )
 
             ## run
-            img_paths = []
-            for chunk in chunked(split_df.select("img_path").toLocalIterator(), TABLE_BS):
-                img_paths.extend(Path(row.img_path) for row in chunk)
+            img_paths = [Path(row) for row in split_df["img_path"].tolist()]
             if not img_paths:
                 continue
 
@@ -865,45 +677,32 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                     )
                 )
             else:
-                scores = list(analyze_inks.map(img_batches))
+                lst_scores = analyze_inks.map(img_batches)
+                scores = [score for batch_scores in lst_scores for score in batch_scores]
 
             ## save to write later
-            split_df = spark.createDataFrame(
-                [(str(p), split, sc) for p, sc in zip(img_paths, scores, strict=True)],
-                schema=["img_path", "split", "score"],
-            )
+            split_df = pd.DataFrame({"img_path": [str(p) for p in img_paths], "split": split, "score": scores})
             df_parts.append(split_df)
-            print(f"Labeled {N_SAMPLES_PER_SPLIT_CLS[split]} samples for split {split}")
-            print(f"Score distribution: {Counter(scores)}")
+            print(f"Labeled {len(split_df)} samples for split {split}")
 
         ## write to df
-        split_df = df_parts[0]
-        for update_df in df_parts[1:]:
-            split_df = split_df.unionByName(update_df)
-        df = (
-            df.alias("main")
-            .join(split_df.alias("upd"), on=["img_path", "split"], how="left")
-            .select(
-                col("main.img_path"),
-                col("main.label"),
-                col("main.split"),
-                # If main already had score, we merge it; otherwise just pick upd
-                coalesce(col("upd.score"), col("main.score")).alias("score"),
-            )
-        )
-        df.write.mode("overwrite").parquet(PARQUET_FILENAME)
+        if df_parts:
+            split_df = pd.concat(df_parts, ignore_index=True)
+            df = df.set_index(["img_path", "split"])
+            split_df = split_df.set_index(["img_path", "split"])
+            df["score"] = split_df["score"].combine_first(df["score"])
+            df = df.reset_index()
+            df.to_csv(CSV_FILENAME, index=False)
     if sft:
         # run trained classifier on df
         df_parts = []
         for split in SPLITS:
             ## get non-labeled samples
-            split_df = df.filter(col("split") == split)
-            split_df = split_df.filter(split_df.score.isNull())
+            split_df = df[df["split"] == split]
+            split_df = split_df[split_df["score"].isna()]
 
             ## run model
-            img_paths = []
-            for chunk in chunked(split_df.select("img_path").toLocalIterator(), TABLE_BS):
-                img_paths.extend(Path(row.img_path) for row in chunk)
+            img_paths = [Path(row) for row in split_df["img_path"].tolist()]
             if not img_paths:
                 continue
 
@@ -918,65 +717,60 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 )
             else:
                 lst_scores = list(classify_ink.map(img_batches))
-            scores = [item for lst in lst_scores for item in lst]
+                scores = [item for lst in lst_scores for item in lst]
 
             ## save to write later
-            split_df = spark.createDataFrame(
-                [(str(p), split, sc) for p, sc in zip(img_paths, scores, strict=True)],
-                schema=["img_path", "split", "score"],
-            )
+            split_df = pd.DataFrame({"img_path": [str(p) for p in img_paths], "split": split, "score": scores})
             df_parts.append(split_df)
 
         ## write to df
         if df_parts:
-            split_df = df_parts[0]
-            for update_df in df_parts[1:]:
-                split_df = split_df.unionByName(update_df)
-            df = (
-                df.alias("main")
-                .join(split_df.alias("upd"), on=["img_path", "split"], how="left")
-                .select(
-                    col("main.img_path"),
-                    col("main.label"),
-                    col("main.split"),
-                    coalesce(col("upd.score"), col("main.score")).alias("score"),
-                )
-            )
-            df.write.mode("overwrite").parquet(PARQUET_FILENAME)
+            split_df = pd.concat(df_parts, ignore_index=True)
+            df = df.set_index(["img_path", "split"])
+            split_df = split_df.set_index(["img_path", "split"])
+            df["score"] = split_df["score"].combine_first(df["score"])
+            df = df.reset_index()
+            df.to_csv(CSV_FILENAME, index=False)
 
         # deduplication
         df_parts = []
 
         ## compute minhash vec
-        compute_phash_udf = udf(lambda img_path: str(phash(Image.open(img_path), hash_size=HASH_SZ)), StringType())
-        compute_minhash_udf = udf(compute_minhash, ArrayType(IntegerType()))
-        vector_udf = udf(lambda minhash: Vectors.dense(minhash), VectorUDT())
-        df = (
-            df.withColumn("phash", compute_phash_udf(col("img_path")))
-            .withColumn("minhash", compute_minhash_udf(col("phash")))
-            .withColumn("minhash_vec", vector_udf(col("minhash")))
-        )
+        df["phash"] = df["img_path"].apply(lambda img_path: str(phash(Image.open(img_path), hash_size=HASH_SZ)))
+        df["minhash"] = df["phash"].apply(compute_minhash)
 
         ## dedup with lsh
         for split in SPLITS:
-            split_df = df.filter(col("split") == split)
+            split_df = df[df["split"] == split].copy()
 
-            ## lsh
-            lsh = MinHashLSH(inputCol="minhash_vec", outputCol="hashes", numHashTables=NUM_PERM)
-            lsh_model = lsh.fit(split_df)
+            # Create LSH index for MinHash values
+            lsh = MinHashLSH(threshold=THRESHOLD, num_perm=NUM_PERM)
+            for idx, row in split_df.iterrows():
+                minhash = MinHash(num_perm=NUM_PERM)
+                for val in row["minhash"]:
+                    minhash.update(str(val).encode("utf-8"))
+                lsh.insert(idx, minhash)
 
-            ## approx sim join
-            split_df = (
-                lsh_model.approxSimilarityJoin(split_df, split_df, THRESHOLD, distCol="distance")
-                .filter("datasetA.img_path != datasetB.img_path")
-                .select("datasetA.*")
-                .distinct()
-            )
-            split_df = split_df.drop("phash", "minhash", "minhash_vec", "hashes")
+            # Find duplicates
+            duplicates = set()
+            for idx, row in split_df.iterrows():
+                minhash = MinHash(num_perm=NUM_PERM)
+                for val in row["minhash"]:
+                    minhash.update(str(val).encode("utf-8"))
+                similar_items = lsh.query(minhash)
+                for similar_idx in similar_items:
+                    if similar_idx != idx:
+                        duplicates.add(idx)
+
+            # Remove duplicates
+            split_df = split_df.drop(list(duplicates))
+            split_df = split_df.drop(columns=["phash", "minhash"])
             df_parts.append(split_df)
-        split_df = df_parts[0]
-        for update_df in df_parts[1:]:
-            split_df = split_df.unionByName(update_df)
+
+        # write to df
+        if df_parts:
+            df = pd.concat(df_parts, ignore_index=True)
+            df.to_csv(CSV_FILENAME, index=False)
 
         # randomly stitch samples together
         img_paths, labels = (
@@ -984,22 +778,21 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
             {split: [] for split in SPLITS},
         )
         for split in SPLITS:
-            split_df = df.filter(col("split") == split)
-
+            split_df = df[df["split"] == split]
+            n_samples = N_SAMPLES_PER_SPLIT_SFT[split]
             for score in CLASSES:
-                split_filter_df = split_df.filter(split_df.score == score)
+                split_filter_df = split_df[split_df["score"] == int(score)]
+                percent = len(split_filter_df) / len(split_df)
 
-                paths, lbls = [], []
-                for chunk in chunked(split_filter_df.select("img_path", "label").toLocalIterator(), TABLE_BS):
-                    paths.extend([Path(row.img_path) for row in chunk])
-                    lbls.extend([row.label for row in chunk])
+                paths = [Path(row) for row in split_filter_df["img_path"].tolist()]
+                lbls = split_filter_df["label"].tolist()
                 if not paths or not lbls:
                     continue
 
                 ## rand sample
                 path_batches = []
                 combined_labels = []
-                for _ in range(N_SAMPLES_PER_SPLIT_SFT[split] // len(CLASSES)):
+                for _ in range(int(n_samples * percent)):
                     num_sample = random.randint(1, STITCH_BS_MAX)
                     idxs = random.sample(range(len(paths)), min(num_sample, len(paths)))  # in case not enough
                     path_batches.append([paths[i] for i in idxs])
@@ -1024,51 +817,46 @@ def main(cls: bool, sft: bool, dpo: bool):  # noqa: C901
                 img_paths[split].extend(stitched_img_paths)
                 labels[split].extend(combined_labels)
 
-            print(f"Generated {N_SAMPLES_PER_SPLIT_SFT[split]} samples for {split} split")
+            print(f"Generated {n_samples} samples for {split} split")
 
-        # write to json
-        write_sft_json(SFT_TRAIN_JSON, img_paths["train"], labels["train"])
-        write_sft_json(SFT_VAL_JSON, img_paths["valid"], labels["valid"])
-        write_sft_json(SFT_TEST_JSON, img_paths["test"], labels["test"])
+        for split in SPLITS:
+            write_sft_json(DATA_VOL_PATH / f"sft_{split}.json", img_paths[split], labels[split])
     if dpo:
         # run model to determine which train samples it fails on
-        for split in SPLITS:
-            json_path = SFT_TRAIN_JSON if split == "train" else SFT_VAL_JSON if split == "valid" else SFT_TEST_JSON
-            with open(json_path, "r") as f:
-                read_ds = yaml.safe_load(f)
-            img_paths = [sample["images"][0] for sample in read_ds]
-            labels = [sample["conversations"][1]["value"] for sample in read_ds]
+        json_path = DATA_VOL_PATH / "sft_train.json"
+        with open(json_path, "r") as f:
+            read_ds = yaml.safe_load(f)
+        img_paths = [sample["images"][0] for sample in read_ds]
+        labels = [sample["conversations"][1]["value"] for sample in read_ds]
 
-            ## run
-            img_batches = list(chunked(img_paths, MAX_NUM_SEQS))
-            if modal.is_local():
-                preds = list(
-                    tqdm(
-                        chain.from_iterable(ft_pred_ink.local(batch) for batch in img_batches),
-                        desc=split,
-                        total=len(img_batches),
-                    )
+        ## run
+        img_batches = list(chunked(img_paths, MAX_NUM_SEQS))
+        if modal.is_local():
+            preds = list(
+                tqdm(
+                    chain.from_iterable(ft_pred_ink.local(batch) for batch in img_batches),
+                    desc="dpo train",
+                    total=len(img_batches),
                 )
-            else:
-                lst_preds = list(ft_pred_ink.map(img_batches))
-                preds = [item for lst in lst_preds for item in lst]
+            )
+        else:
+            lst_preds = list(ft_pred_ink.map(img_batches))
+            preds = [item for lst in lst_preds for item in lst]
 
-            if split == "train":
-                img_paths, labels, preds = zip(
-                    *[
-                        (path, label, pred)
-                        for path, label, pred in zip(img_paths, labels, preds, strict=False)
-                        if label != pred
-                    ],
-                    strict=False,
-                )
-                print(f"Generated {len(img_paths)} DPO samples for {split} split")
-                write_dpo_json(DPO_TRAIN_JSON, img_paths, preds, labels)
+        img_paths, labels, preds = zip(
+            *[
+                (path, label, pred)
+                for path, label, pred in zip(img_paths, labels, preds, strict=False)
+                if label != pred
+            ],
+            strict=False,
+        )
+        print(f"Generated {len(img_paths)} DPO samples for train split")
+        write_dpo_json(DATA_VOL_PATH / "dpo_train.json", img_paths, preds, labels)
 
 
 @app.function(
     image=IMAGE,
-    region=REGION,
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
@@ -1090,5 +878,4 @@ if __name__ == "__main__":
     parser.add_argument("--sft", action="store_true")
     parser.add_argument("--dpo", action="store_true")
     args = parser.parse_args()
-    download_models()
     main(args.cls, args.sft, args.dpo)

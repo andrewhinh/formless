@@ -11,8 +11,8 @@ import typer
 from typing_extensions import Annotated
 
 
-DEFAULT_IMG_URL = "https://www.researchgate.net/publication/328401414/figure/fig1/AS:941482479472661@1601478323514/Handwritten-mathematical-expression-example.png"
-API_URL = "https://bit.ly/formless-api"
+DEFAULT_IMG_URL = "https://formless-data.s3.us-west-1.amazonaws.com/0.png"
+API_URL = "https://andrewhinh--formless-api-modal-get.modal.run"
 
 # Typer CLI
 app = typer.Typer(
@@ -34,7 +34,7 @@ def call_api() -> None:
     else:
         response = requests.post(
             f"{API_URL}/upload",
-            files={"image": open(image_path, "rb")},
+            files={"image_file": open(image_path, "rb")},
             headers={
                 "X-API-Key": api_key,
             },
@@ -45,7 +45,7 @@ def call_api() -> None:
 
 # CLI cmd
 @app.command(
-    help="Handwritten + image OCR.",
+    help="Hard handwriting OCR.",
     epilog="Made by [bold blue]Andrew Hinh.[/bold blue] :mechanical_arm::person_climbing:",
     context_settings={"allow_extra_args": False, "ignore_unknown_options": True},
 )

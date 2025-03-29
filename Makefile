@@ -23,23 +23,15 @@ MSG ?=
 
 migrate:
 	uv run alembic -x env=$(ENV) -c db/migrations/alembic.ini stamp head
-	uv run alembic -x env=$(ENV) -c db/migrations/alembic.ini revision --autogenerate -m "$(MSG)" --version-path db/migrations/versions/$(env)
+	uv run alembic -x env=$(ENV) -c db/migrations/alembic.ini revision --autogenerate -m "$(MSG)" --version-path db/migrations/versions/$(ENV)
 	uv run alembic -x env=$(ENV) -c db/migrations/alembic.ini upgrade head
 
 data:
-	mkdir training/artifacts/mathwriting-2024
-	aria2c -x 16 -s 16 -j 1 -d training/artifacts -o mathwriting-2024.tgz https://storage.googleapis.com/mathwriting_data/mathwriting-2024.tgz
-	tar --use-compress-program="pigz -p 8" -xvf training/artifacts/mathwriting-2024.tgz -C training/artifacts
-	rm training/artifacts/mathwriting-2024.tgz
+	mkdir training/artifacts/mathwriting-2024-excerpt
+	aria2c -x 16 -s 16 -j 1 -d training/artifacts -o mathwriting-2024-excerpt.tgz https://storage.googleapis.com/mathwriting_data/mathwriting-2024-excerpt.tgz
+	tar --use-compress-program="pigz -p 8" -xvf training/artifacts/mathwriting-2024-excerpt.tgz -C training/artifacts
+	rm training/artifacts/mathwriting-2024-excerpt.tgz
 
-
-# sync S3 data
-# Usage: make sync SRC=<source> DEST=<destination>
-SRC ?= training/artifacts/mathwriting-2024
-DEST ?= s3://formless-data
-sync:
-	@if [ -z "$(SRC)" ] || [ -z "$(DEST)" ]; then \
-		echo "Usage: make sync SRC=<source> DEST=<destination>"; \
-		exit 1; \
-	fi
-	aws s3 sync $(SRC) $(DEST) --exact-timestamps --delete --storage-class REDUCED_REDUNDANCY
+upload:
+	modal volume create formless-data
+	modal volume put formless-data training/artifacts/mathwriting-2024-excerpt
