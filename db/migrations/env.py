@@ -47,7 +47,7 @@ def run_migrations_offline() -> None:
 
     """
     context.configure(
-        url=os.getenv("POSTGRES_URL"),  # set as env var in Makefile cmd
+        url=os.getenv("DATABASE_URL"),
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
@@ -65,7 +65,7 @@ def run_migrations_online() -> None:
 
     """
     configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = os.getenv("POSTGRES_URL")
+    configuration["sqlalchemy.url"] = os.getenv("DATABASE_URL")
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

@@ -57,7 +57,7 @@ from utils import (
 # Modal
 
 TIMEOUT = 5 * MINUTES
-CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
+SCALEDOWN_WINDOW = 15 * MINUTES  # max
 ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 if modal.is_local():
@@ -81,7 +81,7 @@ def get_app():  # noqa: C901
     ImageFile.LOAD_TRUNCATED_IMAGES = True
 
     engine = create_engine(
-        url=os.getenv("POSTGRES_URL"),
+        url=os.getenv("DATABASE_URL"),
     )
 
     @contextmanager
@@ -213,9 +213,9 @@ def get_app():  # noqa: C901
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
-    container_idle_timeout=CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=ALLOW_CONCURRENT_INPUTS,
+    scaledown_window=SCALEDOWN_WINDOW,
 )
+@modal.concurrent(max_inputs=ALLOW_CONCURRENT_INPUTS)
 @modal.asgi_app()
 def modal_get():  # noqa: C901
     return get_app()

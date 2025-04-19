@@ -78,7 +78,7 @@ IMAGE = (
 )
 
 TIMEOUT = 5 * MINUTES  # max
-CONTAINER_IDLE_TIMEOUT = 15 * MINUTES  # max
+SCALEDOWN_WINDOW = 15 * MINUTES  # max
 ALLOW_CONCURRENT_INPUTS = 1000  # max
 
 
@@ -156,7 +156,7 @@ def get_app():  # noqa: C901
     )
 
     ## db
-    engine = create_engine(url=os.getenv("POSTGRES_URL"), echo=False)
+    engine = create_engine(url=os.getenv("DATABASE_URL"), echo=False)
 
     @contextmanager
     def get_db_session():
@@ -1624,9 +1624,9 @@ f_app = get_app()
     volumes=VOLUME_CONFIG,
     secrets=SECRETS,
     timeout=TIMEOUT,
-    container_idle_timeout=CONTAINER_IDLE_TIMEOUT,
-    allow_concurrent_inputs=ALLOW_CONCURRENT_INPUTS,
+    scaledown_window=SCALEDOWN_WINDOW,
 )
+@modal.concurrent(max_inputs=ALLOW_CONCURRENT_INPUTS)
 @modal.asgi_app()
 def modal_get():
     return f_app

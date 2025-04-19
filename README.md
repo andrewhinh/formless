@@ -92,35 +92,21 @@ Set up the environment:
 make setup
 ```
 
-Create a `.env` (+ `.env.dev`):
+Create a `.env` (+ `.env.dev` + `.env.local`):
 
 ```bash
 HF_TOKEN=
-OPENAI_API_KEY=
+WANDB_API_KEY=
+WANDB_PROJECT=
+WANDB_ENTITY=
 
-POSTGRES_URL=
-POSTGRES_PRISMA_URL=
-SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_URL=
-POSTGRES_URL_NON_POOLING=
-SUPABASE_JWT_SECRET=
-POSTGRES_USER=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-POSTGRES_PASSWORD=
-POSTGRES_DATABASE=
-SUPABASE_SERVICE_ROLE_KEY=
-POSTGRES_HOST=
-SUPABASE_ANON_KEY=
+DATABASE_URL=
+API_URL=
+DOMAIN=
 
 STRIPE_PUBLISHABLE_KEY=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
-DOMAIN=
-API_URL=
-
-WANDB_API_KEY=
-WANDB_PROJECT=
-WANDB_ENTITY=
 ```
 
 ### Useful Tips
@@ -129,6 +115,7 @@ Migrate db (do before running the frontend/api):
 
 ```bash
 make migrate ENV=<env> MSG=<message>
+# env = main, dev, local
 ```
 
 Visit `http://localhost:4040/` to see the Spark UI when running `training/etl.py`.
@@ -183,7 +170,6 @@ Serve the web app locally:
 ```bash
 uv run frontend/app.py
 stripe listen --forward-to <url>/webhook
-# update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
 
 Serve the web app on Modal:
@@ -191,14 +177,12 @@ Serve the web app on Modal:
 ```bash
 modal serve frontend/app.py
 stripe listen --forward-to <url>/webhook
-# update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
 
 Deploy on dev:
 
 ```bash
 modal deploy frontend/app.py
-# update API_URL, STRIPE_WEBHOOK_SECRET, and DOMAIN in .env.dev
 ```
 
 Deploy on main:

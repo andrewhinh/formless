@@ -298,15 +298,19 @@ DATA_VOLUME = f"{APP_NAME}-data"
 RUNS_VOLUME = f"{APP_NAME}-runs"
 VOLUME_CONFIG: dict[str | PurePosixPath, modal.Volume] = {
     f"/{PRETRAINED_VOLUME}": modal.Volume.from_name(PRETRAINED_VOLUME, create_if_missing=True),
-    f"/{DATA_VOLUME}": modal.Volume.from_name(DATA_VOLUME, create_if_missing=True),
-    f"/{RUNS_VOLUME}": modal.Volume.from_name(RUNS_VOLUME, create_if_missing=True),
 }
 
+if not IN_PROD:
+    VOLUME_CONFIG.update(
+        {
+            f"/{DATA_VOLUME}": modal.Volume.from_name(DATA_VOLUME, create_if_missing=True),
+            f"/{RUNS_VOLUME}": modal.Volume.from_name(RUNS_VOLUME, create_if_missing=True),
+        }
+    )
+
 if modal.is_local():
-    DB_VOL_PATH = PARENT_PATH / "local_db"
     DATA_VOL_PATH = ARTIFACTS_PATH / "mathwriting-2024-excerpt"
     RUNS_VOL_PATH = ARTIFACTS_PATH / "runs"
-    DB_VOL_PATH.mkdir(parents=True, exist_ok=True)
     DATA_VOL_PATH.mkdir(parents=True, exist_ok=True)
     RUNS_VOL_PATH.mkdir(parents=True, exist_ok=True)
 else:
