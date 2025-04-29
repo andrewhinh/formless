@@ -6,11 +6,10 @@ setup:
 	uv run pre-commit install
 	modal setup
 	modal config set-environment dev
+	source .venv/bin/activate
 	git clone git@github.com:Len-Stevens/Python-Antivirus.git
 	git clone --depth 1 training/https://github.com/hiyouga/LLaMA-Factory.git
 	aws configure
-	echo "alias modal='uv run modal'" >> ~/.bashrc
-	echo "export PYTHONPATH=.:$PYTHONPATH" >> ~/.bashrc
 	echo "export TOKENIZERS_PARALLELISM=false" >> ~/.bashrc
 	echo "export HF_HUB_ENABLE_HF_TRANSFER=1" >> ~/.bashrc
 	source ~/.bashrc
