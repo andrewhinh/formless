@@ -4,9 +4,8 @@ setup:
 	sudo apt install libpq-dev libcairo2-dev libjpeg-dev libgif-dev openjdk-11-jdk aria2 pigz s3fs
 	uv sync --all-extras --dev
 	uv run pre-commit install
-	modal setup
-	modal config set-environment dev
 	source .venv/bin/activate
+	modal setup
 	git clone git@github.com:Len-Stevens/Python-Antivirus.git
 	git clone --depth 1 training/https://github.com/hiyouga/LLaMA-Factory.git
 	aws configure

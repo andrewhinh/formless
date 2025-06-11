@@ -147,6 +147,7 @@ def get_app():  # noqa: C901
         boost=True,
     )
     fh.setup_toasts(f_app)
+    f_app.devtools_json()
     f_app.add_middleware(
         CORSMiddleware,
         allow_origins=["/"],
